@@ -58,7 +58,7 @@ class SuiteWasteDB extends Dexie {
     super('SuiteWasteDB');
     this.version(1).stores({
       users: '++id, &email',
-      sessions: '++id, userId, &token', // Index the session token for efficient lookups
+      sessions: '++id, userId',
       tasks: '++id, assignedTo, status',
       payments: '++id, status',
       complianceLogs: '++id, isCompliant',
@@ -66,30 +66,19 @@ class SuiteWasteDB extends Dexie {
     });
   }
   async seedIfEmpty() {
-    // Seed demo users in an idempotent, non‑transactional way.
-    // Compute the password hash once to avoid repeated work.
-    const passwordHash = await hashText('Auditor123');
-    console.log('Seeding demo users if missing...');
-    for (const u of DEMO_USERS_CONFIG) {
-      const existingUser = await this.users.where('email').equalsIgnoreCase(u.email).first();
-      if (!existingUser) {
-        const userToCreate: User = {
-          id: uuidv4(),
-          email: u.email,
-          passwordHash,
-          role: u.role as User['role'],
-          permissions: u.permissions,
-        };
-        try {
-          await this.users.add(userToCreate);
-          console.log(`Seeded user: ${u.email}`);
-        } catch (error) {
-          // Ignore duplicate‑key errors that could arise from race conditions.
-          console.warn(`Failed to add user ${u.email}:`, error);
-        }
-      } else {
-        console.log(`User ${u.email} already exists, skipping.`);
-      }
+    const userCount = await this.users.count();
+    if (userCount === 0) {
+      console.log('Database is empty, seeding demo users...');
+      const passwordHash = await hashText('Auditor123');
+      const usersToCreate = DEMO_USERS_CONFIG.map(u => ({
+        id: uuidv4(),
+        email: u.email,
+        passwordHash,
+        role: u.role,
+        permissions: u.permissions,
+      }));
+      await this.users.bulkAdd(usersToCreate);
+      console.log(`${usersToCreate.length} demo users seeded.`);
     }
   }
   async signIn(email: string, password: string): Promise<User | null> {
