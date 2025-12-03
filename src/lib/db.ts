@@ -70,11 +70,11 @@ class SuiteWasteDB extends Dexie {
     if (userCount === 0) {
       console.log('Database is empty, seeding demo users...');
       const passwordHash = await hashText('Auditor123');
-      const usersToCreate = DEMO_USERS_CONFIG.map(u => ({
+      const usersToCreate: User[] = DEMO_USERS_CONFIG.map(u => ({
         id: uuidv4(),
         email: u.email,
         passwordHash,
-        role: u.role,
+        role: u.role as User['role'],
         permissions: u.permissions,
       }));
       await this.users.bulkAdd(usersToCreate);
