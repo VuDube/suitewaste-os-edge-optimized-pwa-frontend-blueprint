@@ -21,6 +21,8 @@ import {
   Battery,
   Signal,
   Trash2,
+  Lock,
+  Mail,
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import { db, type User } from '@/lib/db';
@@ -33,6 +35,7 @@ import { Progress } from '@/components/ui/progress';
 import { SuiteIcon } from '@/components/ui/SuiteIcon';
 import { useFlowState } from '@/hooks/use-flow-state';
 import { cn } from '@/lib/utils';
+import { Checkbox } from '@/components/ui/checkbox';
 // --- Constants and Types ---
 const BIO_GREEN = '#2E7D32';
 const OLED_BLACK = '#0f0f0f';
@@ -140,65 +143,83 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (user: User) => void 
     }
   };
   return (
-    <div style={{ backgroundColor: OLED_BLACK }} className="min-h-screen flex flex-col items-center justify-center p-4">
+    <div
+      style={{ background: 'linear-gradient(135deg, #2E7D32 0%, #1B5E20 50%, #0D47A1 100%)' }}
+      className="min-h-screen flex flex-col items-center justify-center p-4"
+    >
       <div className="w-full max-w-md mx-auto">
-        <div className="text-center mb-12">
-          <img src="https://i.imgur.com/Jt5g2S6.png" alt="SuiteWaste Logo" className="w-24 h-24 mx-auto mb-4" />
+        <div className="text-center mb-8">
+          <img src="https://i.imgur.com/Jt5g2S6.png" alt="SuiteWaste Logo" className="w-32 h-32 mx-auto mb-4 shadow-glow" />
           <h1 className="text-4xl font-bold text-white">SuiteWaste OS</h1>
-          <p className="text-neutral-400">Edge-Optimized Waste Management</p>
+          <p className="text-lg text-gray-300">Industrial Waste Management</p>
         </div>
-        <Card className="bg-white/5 border-white/10 shadow-lg backdrop-blur-lg rounded-2xl">
-          <CardContent className="p-8">
-            <Form {...form}>
-              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-                <FormField
-                  control={form.control}
-                  name="email"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className="text-neutral-300">Email</FormLabel>
-                      <FormControl>
+        <div className="bg-green-900/10 backdrop-blur-xl border border-green-500/20 rounded-2xl p-8 shadow-xl">
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+              <FormField
+                control={form.control}
+                name="email"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-gray-200 uppercase text-xs font-bold">Work Email</FormLabel>
+                    <FormControl>
+                      <div className="relative flex items-center">
+                        <Mail className="absolute left-3 w-5 h-5 text-green-300" />
                         <Input
                           type="email"
-                          placeholder="user@suitewaste.os"
-                          className="bg-black/30 border-white/20 text-white placeholder:text-neutral-500 rounded-lg"
+                          placeholder="admin@suitewaste.os"
+                          className="bg-green-900/20 border border-green-500/30 text-white placeholder:text-gray-400 rounded-xl pl-10 pr-4 py-3 h-12"
                           {...field}
                         />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="password"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className="text-neutral-300">Password</FormLabel>
-                      <FormControl>
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="password"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-gray-200 uppercase text-xs font-bold">Password</FormLabel>
+                    <FormControl>
+                      <div className="relative flex items-center">
+                        <Lock className="absolute left-3 w-5 h-5 text-green-300" />
                         <Input
                           type="password"
                           placeholder="••••••••"
-                          className="bg-black/30 border-white/20 text-white placeholder:text-neutral-500 rounded-lg"
+                          className="bg-green-900/20 border border-green-500/30 text-white placeholder:text-gray-400 rounded-xl pl-10 pr-4 py-3 h-12"
                           {...field}
                         />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <Button
-                  type="submit"
-                  className="w-full text-white font-bold py-3 rounded-lg transition-all duration-300"
-                  style={{ backgroundColor: BIO_GREEN }}
-                  disabled={isSubmitting}
-                >
-                  {isSubmitting ? <Loader className="animate-spin" /> : 'Sign In'}
-                </Button>
-              </form>
-            </Form>
-          </CardContent>
-        </Card>
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <div className="flex items-center justify-between text-sm">
+                <div className="flex items-center space-x-2">
+                  <Checkbox id="remember-me" className="border-white data-[state=checked]:bg-white data-[state=checked]:text-green-900" />
+                  <label htmlFor="remember-me" className="text-gray-200">Remember me</label>
+                </div>
+                <a href="#" className="text-green-200 underline hover:text-white">Reset password?</a>
+              </div>
+              <Button
+                type="submit"
+                className="w-full bg-white text-green-900 font-bold py-4 h-14 text-base rounded-xl transition-all duration-300 hover:scale-105 active:scale-100 flex items-center justify-center"
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? <Loader className="animate-spin" /> : (
+                  <>
+                    Sign In to System
+                    <ArrowRight className="ml-2 h-5 w-5" />
+                  </>
+                )}
+              </Button>
+            </form>
+          </Form>
+        </div>
       </div>
     </div>
   );
@@ -374,8 +395,14 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
         }, 500);
       }
     };
-    navigator.serviceWorker.addEventListener('message', handleMessage);
-    return () => navigator.serviceWorker.removeEventListener('message', handleMessage);
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.addEventListener('message', handleMessage);
+    }
+    return () => {
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.removeEventListener('message', handleMessage);
+        }
+    };
   }, []);
   const handleManualSync = () => {
     if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) {

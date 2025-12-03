@@ -67,18 +67,25 @@ class SuiteWasteDB extends Dexie {
   }
   async seedIfEmpty() {
     const userCount = await this.users.count();
-    if (userCount === 0) {
-      console.log('Database is empty, seeding demo users...');
+    if (userCount < DEMO_USERS_CONFIG.length) {
+      console.log('Database is missing some demo users, seeding...');
       const passwordHash = await hashText('Auditor123');
-      const usersToCreate: User[] = DEMO_USERS_CONFIG.map(u => ({
-        id: uuidv4(),
-        email: u.email,
-        passwordHash,
-        role: u.role as User['role'],
-        permissions: u.permissions,
-      }));
-      await this.users.bulkAdd(usersToCreate);
-      console.log(`${usersToCreate.length} demo users seeded.`);
+      for (const u of DEMO_USERS_CONFIG) {
+        const existingUser = await this.users.where('email').equalsIgnoreCase(u.email).first();
+        if (!existingUser) {
+          const userToCreate: User = {
+            id: uuidv4(),
+            email: u.email,
+            passwordHash,
+            role: u.role as User['role'],
+            permissions: u.permissions,
+          };
+          await this.users.add(userToCreate);
+          console.log(`Seeded user: ${u.email}`);
+        } else {
+          console.log(`User ${u.email} already exists, skipping.`);
+        }
+      }
     }
   }
   async signIn(email: string, password: string): Promise<User | null> {
