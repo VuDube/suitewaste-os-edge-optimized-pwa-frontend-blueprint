@@ -58,7 +58,7 @@ class SuiteWasteDB extends Dexie {
     super('SuiteWasteDB');
     this.version(1).stores({
       users: '++id, &email',
-      sessions: '++id, userId',
+      sessions: '++id, userId, &token', // Index the session token for efficient lookups
       tasks: '++id, assignedTo, status',
       payments: '++id, status',
       complianceLogs: '++id, isCompliant',
@@ -68,23 +68,30 @@ class SuiteWasteDB extends Dexie {
   async seedIfEmpty() {
     const userCount = await this.users.count();
     if (userCount < DEMO_USERS_CONFIG.length) {
-      console.log('Database is missing some demo users, seeding...');
-      const passwordHash = await hashText('Auditor123');
-      for (const u of DEMO_USERS_CONFIG) {
-        const existingUser = await this.users.where('email').equalsIgnoreCase(u.email).first();
-        if (!existingUser) {
-          const userToCreate: User = {
-            id: uuidv4(),
-            email: u.email,
-            passwordHash,
-            role: u.role as User['role'],
-            permissions: u.permissions,
-          };
-          await this.users.add(userToCreate);
-          console.log(`Seeded user: ${u.email}`);
-        } else {
-          console.log(`User ${u.email} already exists, skipping.`);
-        }
+      console.log('Database is missing some demo users, seeding atomically...');
+      try {
+        await this.transaction('rw', this.users, async () => {
+          const passwordHash = await hashText('Auditor123');
+          for (const u of DEMO_USERS_CONFIG) {
+            const existingUser = await this.users.where('email').equalsIgnoreCase(u.email).first();
+            if (!existingUser) {
+              const userToCreate: User = {
+                id: uuidv4(),
+                email: u.email,
+                passwordHash,
+                role: u.role as User['role'],
+                permissions: u.permissions,
+              };
+              await this.users.add(userToCreate);
+              console.log(`Seeded user: ${u.email}`);
+            } else {
+              console.log(`User ${u.email} already exists, skipping.`);
+            }
+          }
+        });
+      } catch (error) {
+        console.error("Seeding transaction failed:", error);
+        // This will prevent the app from crashing on constraint errors during seeding.
       }
     }
   }

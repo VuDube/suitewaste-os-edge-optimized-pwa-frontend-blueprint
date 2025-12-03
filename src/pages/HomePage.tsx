@@ -273,8 +273,13 @@ const SuiteWasteOS = ({ user, onLogout, activeSuite, setActiveSuite }: { user: U
   );
 };
 const FlowStateLayout = ({ children }: { children: React.ReactNode }) => (
-  <div className="max-w-2xl mx-auto h-screen flex flex-col bg-black rounded-lg shadow-2xl overflow-hidden border border-white/10">
-    {children}
+  <div
+    style={{ background: 'linear-gradient(135deg, #2E7D32 0%, #1B5E20 50%, #0D47A1 100%)' }}
+    className="min-h-screen flex flex-col"
+  >
+    <div className="max-w-2xl mx-auto h-screen flex flex-col bg-black/50 rounded-lg shadow-2xl overflow-hidden border border-green-500/20">
+      {children}
+    </div>
   </div>
 );
 const StatusBar = () => {
@@ -284,7 +289,7 @@ const StatusBar = () => {
     return () => clearInterval(timer);
   }, []);
   return (
-    <div className="w-full px-4 py-1 flex justify-between items-center text-xs font-medium text-neutral-300 bg-black/50">
+    <div className="w-full px-4 py-1 flex justify-between items-center text-xs font-medium text-neutral-300 bg-green-900/20 border-b border-green-500/20">
       <div>{time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
       <div className="flex items-center gap-2">
         <Signal size={14} />
@@ -299,14 +304,20 @@ const Homescreen = ({ availableSuites, onSuiteSelect }: { availableSuites: typeo
     <h2 className="text-3xl font-bold text-center mb-12 text-white">Welcome, {availableSuites.length > 3 ? "Manager" : "Operator"}</h2>
     <div className="grid grid-cols-3 sm:grid-cols-4 gap-y-8 gap-x-4 justify-items-center">
       {availableSuites.map(suite => (
-        <SuiteIcon key={suite.key} icon={suite.icon} label={suite.label} onClick={() => onSuiteSelect(suite.key)} />
+        <SuiteIcon
+          key={suite.key}
+          icon={suite.icon}
+          label={suite.label}
+          onClick={() => onSuiteSelect(suite.key)}
+          className="bg-green-500/10 hover:bg-green-500/20 border-green-500/20 shadow-lg shadow-green-900/50"
+        />
       ))}
     </div>
   </div>
 );
 const Dock = ({ onSwitcherOpen, onLogout }: { onSwitcherOpen: () => void; onLogout: () => void; }) => (
   <div className="w-full p-2">
-    <div className="bg-white/5 border border-white/10 backdrop-blur-lg rounded-full flex justify-around items-center h-16">
+    <div className="bg-green-900/20 border border-green-500/20 backdrop-blur-lg rounded-full flex justify-around items-center h-16">
       <Button variant="ghost" size="icon" className="rounded-full text-white/70 hover:text-white" onClick={onSwitcherOpen}><Menu /></Button>
       <SettingsSheet onLogout={onLogout} />
     </div>
@@ -341,7 +352,7 @@ const SuiteSwitcher = ({ isOpen, onClose, availableSuites, onSuiteSelect }: { is
                   icon={suite.icon}
                   label={suite.label}
                   onClick={() => onSuiteSelect(suite.key)}
-                  className="w-24 h-24 md:w-28 md:h-28"
+                  className="w-24 h-24 md:w-28 md:h-28 bg-green-500/10 hover:bg-green-500/20 border-green-500/20 shadow-lg shadow-green-900/50"
                   iconClassName="w-12 h-12 md:w-14 md:h-14"
                 />
               </motion.div>
@@ -366,15 +377,15 @@ const DashboardView = ({ suiteKey, onBack }: { suiteKey: SuiteKey; onBack: () =>
     }
   };
   return (
-    <Card className="bg-transparent border-none text-white">
-      <CardHeader className="flex flex-row items-center justify-between">
+    <Card className="bg-green-900/10 border border-green-500/20 backdrop-blur-xl text-white rounded-2xl p-6 shadow-xl">
+      <CardHeader className="flex flex-row items-center justify-between p-0 mb-4">
         <div className="flex items-center gap-4">
           <suite.icon className="w-8 h-8" style={{ color: BIO_GREEN }} />
           <CardTitle className="text-2xl font-bold">{suite.label}</CardTitle>
         </div>
-        <Button variant="ghost" onClick={onBack}>Back</Button>
+        <Button variant="ghost" onClick={onBack} className="text-white/80 hover:text-white hover:bg-green-500/20">Back</Button>
       </CardHeader>
-      <CardContent className="text-neutral-300">
+      <CardContent className="text-neutral-300 p-0">
         {renderContent()}
       </CardContent>
     </Card>
@@ -428,7 +439,8 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
       <SheetTrigger asChild>
         <Button variant="ghost" size="icon" className="rounded-full text-white/70 hover:text-white"><Settings /></Button>
       </SheetTrigger>
-      <SheetContent className="bg-neutral-900 border-l-neutral-800 text-white">
+      <SheetContent className="bg-green-900 border-l-green-500/20 text-white/90" aria-describedby="settings-description">
+        <span id="settings-description" className="sr-only">Settings panel for sync and account actions</span>
         <SheetHeader>
           <SheetTitle className="text-white">Settings</SheetTitle>
         </SheetHeader>
@@ -438,10 +450,10 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
             <p className="text-sm text-neutral-400">
               Force sync local data with the network. Use this if you have connection issues.
             </p>
-            <Button onClick={handleManualSync} disabled={isSyncing} className="w-full" style={{ backgroundColor: BIO_GREEN }}>
+            <Button onClick={handleManualSync} disabled={isSyncing} className="w-full bg-green-500 text-white hover:bg-green-600">
               {isSyncing ? 'Syncing...' : 'Start Manual Sync'}
             </Button>
-            {isSyncing && <Progress value={syncProgress} className="mt-2" />}
+            {isSyncing && <Progress value={syncProgress} className="mt-2 [&>*]:bg-green-400" />}
           </div>
           <div className="space-y-2">
             <h3 className="font-semibold text-destructive">Danger Zone</h3>
@@ -454,7 +466,7 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
           </Button>
         </div>
         <footer className="absolute bottom-4 left-4 right-4 text-center text-xs text-neutral-500">
-            Built with ❤️ at Cloudflare
+            Built with ❤��� at Cloudflare
         </footer>
       </SheetContent>
     </Sheet>
