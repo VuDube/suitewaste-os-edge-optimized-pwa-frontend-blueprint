@@ -77,7 +77,10 @@ function updateWranglerJsonc() {
 }
 
 function runSetupCommands() {
-    const commands = [];
+    const commands = [
+    "bun add dexie@^3.2.4",
+    "bun add @use-gesture/react@^10.3.0"
+];
     
     if (commands.length === 0) {
         console.log('⊘ No setup commands to run');
