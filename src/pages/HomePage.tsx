@@ -1,16 +1,14 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { AnimatePresence, motion, useDragControls } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import {
   Briefcase, CreditCard, ShieldCheck, BookOpen, Bot, Settings, LogOut, Loader, WifiOff, CheckCircle,
-  ArrowRight, Menu, Battery, Signal, Trash2, Lock, Mail, PlusCircle, ArrowLeft, Send, BarChart, ListChecks,
-  Book, Check, X, Search, Download, Edit, Maximize
+  ArrowRight, Menu, Battery, Signal, Trash2, Lock, Mail, PlusCircle, ArrowLeft, Send, XCircle
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import Dexie, { type Table } from 'dexie';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { useGesture } from '@use-gesture/react';
 import { v4 as uuidv4 } from 'uuid';
 import { hashText } from '@/lib/fast-hash';
@@ -42,7 +40,7 @@ export interface ComplianceLog { id: string; description: string; compliant: boo
 export interface TrainingModule { id: string; title: string; content: string; completed: boolean; }
 export interface AiMessage { id: string; role: 'user' | 'ai'; content: string; timestamp: number; }
 export interface OutboxItem { id: string; type: string; payload: any; timestamp: number; }
-export class SuiteWasteDB extends Dexie {
+class SuiteWasteDB extends Dexie {
   users!: Table<User>;
   sessions!: Table<Session>;
   tasks!: Table<Task>;
@@ -53,9 +51,9 @@ export class SuiteWasteDB extends Dexie {
   outbox!: Table<OutboxItem>;
   constructor() {
     super('SuiteWasteDB');
-    this.version(2).stores({
-      users: '++id, &email',
-      sessions: '++id, userId',
+    this.version(3).stores({
+      users: '++id, &email, role',
+      sessions: '++id, userId, createdAt',
       tasks: '++id, status, assignedTo, dueDate',
       payments: '++id, status, date',
       complianceLogs: '++id, compliant, timestamp',
@@ -68,7 +66,7 @@ export class SuiteWasteDB extends Dexie {
     const userCount = await this.users.count();
     if (userCount > 0) return;
     console.log("Database is empty, seeding demo data...");
-    const demoUsers = [
+    const demoUsers: Omit<User, 'id' | 'passwordHash'>[] = [
       { email: 'field@suitewaste.os', role: 'Field Operator', permissions: ['operations', 'training'] },
       { email: 'manager@suitewaste.os', role: 'Operations Manager', permissions: ['operations', 'payments', 'compliance', 'training', 'ai'] },
       { email: 'auditor@suitewaste.os', role: 'Compliance/Audit Officer', permissions: ['compliance', 'training'] },
@@ -80,57 +78,31 @@ export class SuiteWasteDB extends Dexie {
       for (const u of demoUsers) {
         const existing = await this.users.where({ email: u.email }).first();
         if (!existing) {
-          await this.users.put({ id: uuidv4(), passwordHash, ...u });
+          await this.users.put({ id: uuidv4(), passwordHash, ...u } as User);
         }
       }
     });
     const manager = await this.users.where({ role: 'Operations Manager' }).first();
     if (!manager) return;
     await this.transaction('rw', this.tasks, this.payments, this.complianceLogs, this.trainingModules, this.aiMessages, async () => {
-        // Seed Tasks
         if (await this.tasks.count() === 0) {
-            const tasksToSeed: Omit<Task, 'id'>[] = Array.from({ length: 20 }, (_, i) => ({
-                title: `Task #${i + 1}: Collect from Client ${String.fromCharCode(65 + (i % 10))}`,
-                status: i % 3 === 0 ? 'completed' : 'pending',
-                assignedTo: manager.id,
-                dueDate: Date.now() + (i - 10) * 24 * 60 * 60 * 1000,
-            }));
+            const tasksToSeed: Omit<Task, 'id'>[] = Array.from({ length: 20 }, (_, i) => ({ title: `Task #${i + 1}: Collect from Client ${String.fromCharCode(65 + (i % 10))}`, status: i % 3 === 0 ? 'completed' : 'pending', assignedTo: manager.id, dueDate: Date.now() + (i - 10) * 24 * 60 * 60 * 1000, }));
             await this.tasks.bulkAdd(tasksToSeed.map(t => ({...t, id: uuidv4()})));
         }
-        // Seed Payments
         if (await this.payments.count() === 0) {
-            const paymentsToSeed: Omit<Payment, 'id'>[] = Array.from({ length: 15 }, (_, i) => ({
-                amount: Math.floor(Math.random() * 5000) + 1000,
-                status: i % 4 === 0 ? 'due' : 'paid',
-                client: `Client Corp ${String.fromCharCode(65 + (i % 10))}`,
-                date: Date.now() - i * 7 * 24 * 60 * 60 * 1000,
-            }));
+            const paymentsToSeed: Omit<Payment, 'id'>[] = Array.from({ length: 15 }, (_, i) => ({ amount: Math.floor(Math.random() * 5000) + 1000, status: i % 4 === 0 ? 'due' : 'paid', client: `Client Corp ${String.fromCharCode(65 + (i % 10))}`, date: Date.now() - i * 7 * 24 * 60 * 60 * 1000, }));
             await this.payments.bulkAdd(paymentsToSeed.map(p => ({...p, id: uuidv4()})));
         }
-        // Seed Compliance Logs
         if (await this.complianceLogs.count() === 0) {
-            const logsToSeed: Omit<ComplianceLog, 'id'>[] = Array.from({ length: 25 }, (_, i) => ({
-                description: `Log entry for site visit ${i + 1}. Checked safety protocols.`,
-                compliant: Math.random() > 0.2,
-                timestamp: Date.now() - i * 3 * 24 * 60 * 60 * 1000,
-            }));
+            const logsToSeed: Omit<ComplianceLog, 'id'>[] = Array.from({ length: 25 }, (_, i) => ({ description: `Log entry for site visit ${i + 1}. Checked safety protocols.`, compliant: Math.random() > 0.2, timestamp: Date.now() - i * 3 * 24 * 60 * 60 * 1000, }));
             await this.complianceLogs.bulkAdd(logsToSeed.map(l => ({...l, id: uuidv4()})));
         }
-        // Seed Training Modules
         if (await this.trainingModules.count() === 0) {
-            const modulesToSeed: Omit<TrainingModule, 'id'>[] = [
-                { title: 'Safety Protocols 101', content: '...', completed: true },
-                { title: 'Waste Handling Procedures', content: '...', completed: true },
-                { title: 'Emergency Response', content: '...', completed: false },
-                { title: 'Client Communication', content: '...', completed: false },
-            ];
+            const modulesToSeed: Omit<TrainingModule, 'id'>[] = [ { title: 'Safety Protocols 101', content: '...', completed: true }, { title: 'Waste Handling Procedures', content: '...', completed: true }, { title: 'Emergency Response', content: '...', completed: false }, { title: 'Client Communication', content: '...', completed: false }, ];
             await this.trainingModules.bulkAdd(modulesToSeed.map(m => ({...m, id: uuidv4()})));
         }
-        // Seed AI Messages
         if (await this.aiMessages.count() === 0) {
-            const messagesToSeed: Omit<AiMessage, 'id'>[] = [
-                { role: 'ai', content: 'Welcome to AI Assist. How can I help you optimize operations today?', timestamp: Date.now() - 10000 },
-            ];
+            const messagesToSeed: Omit<AiMessage, 'id'>[] = [ { role: 'ai', content: 'Welcome to AI Assist. How can I help you optimize operations today?', timestamp: Date.now() - 10000 }, ];
             await this.aiMessages.bulkAdd(messagesToSeed.map(m => ({...m, id: uuidv4()})));
         }
     });
@@ -154,60 +126,53 @@ export class SuiteWasteDB extends Dexie {
     return this.users.get(session.userId) ?? null;
   }
 }
-export const db = new SuiteWasteDB();
+const db = new SuiteWasteDB();
 // --- Service Worker (Inlined as Blob) ---
 const swCode = `
   const CACHE_NAME = 'suitewaste-os-cache-v1';
-  const APP_SHELL_URLS = [
-    '/',
-    '/index.html',
-    // Add other critical assets here if they are not inlined
-  ];
-  self.addEventListener('install', event => {
-    event.waitUntil(
-      caches.open(CACHE_NAME).then(cache => {
-        console.log('Opened cache');
-        return cache.addAll(APP_SHELL_URLS);
-      })
-    );
-  });
+  const APP_SHELL_URLS = ['/', '/index.html'];
+  self.addEventListener('install', event => { event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL_URLS))); });
   self.addEventListener('fetch', event => {
     if (event.request.url.includes('/api/')) {
-      event.respondWith(
-        fetch(event.request).catch(() => {
-          return new Response(JSON.stringify({ success: false, error: 'Offline' }), {
-            headers: { 'Content-Type': 'application/json' }
-          });
-        })
-      );
+      event.respondWith(fetch(event.request).catch(() => new Response(JSON.stringify({ success: false, error: 'Offline' }), { headers: { 'Content-Type': 'application/json' } })));
     } else {
-      event.respondWith(
-        caches.match(event.request).then(response => {
-          return response || fetch(event.request);
-        })
-      );
+      event.respondWith(caches.match(event.request).then(response => response || fetch(event.request)));
     }
   });
   self.addEventListener('message', event => {
     if (event.data && event.data.type === 'MANUAL_SYNC') {
-      console.log('Manual sync initiated from client.');
-      // Simulate a sync process
       let progress = 0;
       const interval = setInterval(() => {
         progress += 20;
-        self.clients.matchAll().then(clients => {
-          clients.forEach(client => client.postMessage({ type: 'SYNC_PROGRESS', progress }));
-        });
+        self.clients.matchAll().then(clients => clients.forEach(client => client.postMessage({ type: 'SYNC_PROGRESS', progress })));
         if (progress >= 100) {
           clearInterval(interval);
-          self.clients.matchAll().then(clients => {
-            clients.forEach(client => client.postMessage({ type: 'SYNC_COMPLETE' }));
-          });
+          self.clients.matchAll().then(clients => clients.forEach(client => client.postMessage({ type: 'SYNC_COMPLETE' })));
         }
       }, 500);
     }
   });
 `;
+// --- Custom Realtime Hook ---
+function useRealtimeQuery<T>(query: () => Promise<T[] | undefined>) {
+  const [data, setData] = useState<T[] | undefined>(undefined);
+  const fetch_data = useCallback(async () => {
+    try {
+      const result = await query();
+      setData(result);
+    } catch (error) {
+      console.error("Realtime query failed:", error);
+      toast.error("Failed to load data.");
+    }
+  }, [query]);
+  useEffect(() => {
+    fetch_data();
+    const subscription = () => { fetch_data(); };
+    db.on('changes', subscription);
+    return () => db.on('changes').unsubscribe(subscription);
+  }, [fetch_data]);
+  return data;
+}
 // --- Inlined Components ---
 const SuiteIcon = React.forwardRef<HTMLButtonElement, { icon: React.ElementType; label: string; className?: string; iconClassName?: string; onClick?: () => void }>(
   ({ icon: Icon, label, className, iconClassName, onClick }, ref) => (
@@ -216,8 +181,8 @@ const SuiteIcon = React.forwardRef<HTMLButtonElement, { icon: React.ElementType;
       onClick={onClick}
       className={cn("flex flex-col items-center justify-center text-center space-y-2 w-20 h-20 rounded-3xl transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-black focus-visible:ring-green-400", className)}
       variants={{
-        hover: { scale: 1.1, boxShadow: '0 0 20px rgba(46, 125, 50, 0.7)' },
-        tap: { scale: 0.95 }
+        hover: { scale: 1.1, filter: `drop-shadow(0 0 15px ${BIO_GREEN}A0)` },
+        tap: { scale: 0.95, boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.3)' }
       }}
       whileHover="hover"
       whileTap="tap"
@@ -324,22 +289,12 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (user: User) => void 
       className="min-h-screen flex flex-col items-center justify-center p-4 -m-8 md:-m-10 lg:-m-12"
     >
       <div className="w-full max-w-md mx-auto">
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="text-center mb-8"
-        >
+        <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="text-center mb-8">
           <img src="https://i.imgur.com/Jt5g2S6.png" alt="SuiteWaste Logo" className="w-32 h-32 mx-auto mb-4" style={{ filter: 'drop-shadow(0 0 15px rgba(46, 125, 50, 0.8))' }} />
           <h1 className="text-4xl font-bold text-white">SuiteWaste OS</h1>
           <p className="text-lg text-gray-300">Edge-Optimized Waste Management</p>
         </motion.div>
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.5, delay: 0.2 }}
-          className="bg-black/10 backdrop-blur-2xl border border-white/10 rounded-3xl p-8 shadow-[0_8px_32px_rgba(0,0,0,0.37)]"
-        >
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5, delay: 0.2 }} className="bg-black/10 backdrop-blur-2xl border border-white/10 rounded-3xl p-8 shadow-[0_8px_32px_rgba(0,0,0,0.37)]">
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
               <FormField control={form.control} name="email" render={({ field }) => (
@@ -396,8 +351,9 @@ const SuiteWasteOS = ({ user, onLogout }: { user: User; onLogout: () => void; })
   const openSwitcher = () => setSwitcherOpen(true);
   const closeSwitcher = () => setSwitcherOpen(false);
   const bindSuiteGesture = useGesture({
-    onDrag: ({ event, touches, down, movement: [mx], velocity: [vx], direction: [dx] }) => {
-      if (event.touches?.length === 2 && Math.abs(mx) > 50 && Math.abs(vx) > 0.5) {
+    onDrag: ({ event, touches, down, movement: [mx], velocity: [vx] }) => {
+      const isTwoFingerDrag = (event as TouchEvent).touches?.length === 2 || touches === 2;
+      if (isTwoFingerDrag && Math.abs(mx) > 50 && Math.abs(vx) > 0.5) {
         if (!isSwitcherOpen) openSwitcher();
       }
     },
@@ -496,6 +452,7 @@ const SuiteSwitcher = ({ isOpen, onClose, availableSuites, onSuiteSelect }: { is
 const DashboardView = ({ suiteKey, onBack }: { suiteKey: SuiteKey; onBack: () => void; }) => {
   const suite = SUITES.find(s => s.key === suiteKey);
   if (!suite) return <div>Suite not found</div>;
+  const Icon = suite.icon;
   const renderContent = () => {
     switch (suiteKey) {
       case 'operations': return <OperationsDashboard />;
@@ -511,7 +468,7 @@ const DashboardView = ({ suiteKey, onBack }: { suiteKey: SuiteKey; onBack: () =>
       <CardHeader className="flex flex-row items-center justify-between p-0 mb-4">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="icon" onClick={onBack} className="text-white/80 hover:text-white hover:bg-white/10 rounded-full"><ArrowLeft /></Button>
-          <suite.icon className="w-8 h-8" style={{ color: BIO_GREEN }} />
+          <Icon className="w-8 h-8" style={{ color: BIO_GREEN }} />
           <CardTitle className="text-2xl font-bold">{suite.label}</CardTitle>
         </div>
       </CardHeader>
@@ -522,22 +479,15 @@ const DashboardView = ({ suiteKey, onBack }: { suiteKey: SuiteKey; onBack: () =>
   );
 };
 const OperationsDashboard = () => {
-    const tasks = useLiveQuery(() => db.tasks.orderBy('dueDate').toArray(), []);
+    const tasks = useRealtimeQuery<Task>(() => db.tasks.orderBy('dueDate').toArray());
     const [newTaskTitle, setNewTaskTitle] = useState('');
     const handleAddTask = async () => {
         if (!newTaskTitle.trim()) return;
         const manager = await db.users.where({ role: 'Operations Manager' }).first();
-        if (!manager) {
-            toast.error("Manager not found to assign task.");
-            return;
-        }
-        await db.tasks.add({
-            id: uuidv4(),
-            title: newTaskTitle,
-            status: 'pending',
-            assignedTo: manager.id,
-            dueDate: Date.now() + 24 * 60 * 60 * 1000,
-        });
+        if (!manager) { toast.error("Manager not found to assign task."); return; }
+        const payload = { id: uuidv4(), title: newTaskTitle, status: 'pending', assignedTo: manager.id, dueDate: Date.now() + 24 * 60 * 60 * 1000 };
+        await db.tasks.add(payload);
+        await db.outbox.add({ id: uuidv4(), type: 'task_create', payload, timestamp: Date.now() });
         setNewTaskTitle('');
         toast.success("Task added!");
     };
@@ -552,7 +502,7 @@ const OperationsDashboard = () => {
             </div>
             <ul className="space-y-2">
                 {tasks?.map(task => (
-                    <li key={task.id} onDoubleClick={() => toggleTaskStatus(task)} className="flex items-center justify-between p-3 bg-white/5 rounded-lg cursor-pointer">
+                    <li key={task.id} onDoubleClick={() => toggleTaskStatus(task)} className="flex items-center justify-between p-3 bg-white/5 rounded-lg cursor-pointer transition-colors hover:bg-white/10">
                         <span className={cn("flex-grow", task.status === 'completed' && 'line-through text-neutral-500')}>{task.title}</span>
                         <Button size="icon" variant="ghost" onClick={() => toggleTaskStatus(task)}>
                             {task.status === 'completed' ? <CheckCircle className="text-green-500" /> : <div className="w-5 h-5 rounded-full border-2 border-neutral-400" />}
@@ -564,14 +514,13 @@ const OperationsDashboard = () => {
     );
 };
 const PaymentsDashboard = () => {
-    const payments = useLiveQuery(() => db.payments.orderBy('date').toArray(), []);
+    const payments = useRealtimeQuery<Payment>(() => db.payments.orderBy('date').toArray());
     const chartData = useMemo(() => {
         return payments?.reduce((acc, p) => {
             const month = new Date(p.date).toLocaleString('default', { month: 'short' });
             const existing = acc.find(item => item.name === month);
             if (existing) {
-                if (p.status === 'paid') existing.paid += p.amount;
-                else existing.due += p.amount;
+                if (p.status === 'paid') existing.paid += p.amount; else existing.due += p.amount;
             } else {
                 acc.push({ name: month, paid: p.status === 'paid' ? p.amount : 0, due: p.status === 'due' ? p.amount : 0 });
             }
@@ -588,7 +537,7 @@ const PaymentsDashboard = () => {
                     <YAxis stroke="rgba(255,255,255,0.7)" />
                     <Tooltip contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.2)' }} />
                     <Legend />
-                    <Bar dataKey="paid" fill="#2E7D32" />
+                    <Bar dataKey="paid" fill={BIO_GREEN} />
                     <Bar dataKey="due" fill="#b71c1c" />
                 </RechartsBarChart>
             </ResponsiveContainer>
@@ -597,9 +546,7 @@ const PaymentsDashboard = () => {
                 {payments?.slice(-5).reverse().map(p => (
                     <li key={p.id} className="flex justify-between p-2 bg-white/5 rounded-lg">
                         <span>{p.client}</span>
-                        <span className={cn(p.status === 'paid' ? 'text-green-400' : 'text-red-400')}>
-                            ${p.amount.toFixed(2)}
-                        </span>
+                        <span className={cn(p.status === 'paid' ? 'text-green-400' : 'text-red-400')}>${p.amount.toFixed(2)}</span>
                     </li>
                 ))}
             </ul>
@@ -607,14 +554,14 @@ const PaymentsDashboard = () => {
     );
 };
 const ComplianceDashboard = () => {
-    const logs = useLiveQuery(() => db.complianceLogs.orderBy('timestamp').reverse().toArray(), []);
+    const logs = useRealtimeQuery<ComplianceLog>(() => db.complianceLogs.orderBy('timestamp').reverse().toArray());
     const toggleCompliance = (log: ComplianceLog) => {
         db.complianceLogs.update(log.id, { compliant: !log.compliant });
     };
     return (
         <ul className="space-y-2">
             {logs?.map(log => (
-                <li key={log.id} onDoubleClick={() => toggleCompliance(log)} className="flex items-center justify-between p-3 bg-white/5 rounded-lg cursor-pointer">
+                <li key={log.id} onDoubleClick={() => toggleCompliance(log)} className="flex items-center justify-between p-3 bg-white/5 rounded-lg cursor-pointer transition-colors hover:bg-white/10">
                     <div className="flex-grow">
                         <p>{log.description}</p>
                         <p className="text-xs text-neutral-400">{new Date(log.timestamp).toLocaleDateString()}</p>
@@ -628,7 +575,7 @@ const ComplianceDashboard = () => {
     );
 };
 const TrainingDashboard = () => {
-    const modules = useLiveQuery(() => db.trainingModules.toArray(), []);
+    const modules = useRealtimeQuery<TrainingModule>(() => db.trainingModules.toArray());
     const toggleModule = (mod: TrainingModule) => {
         db.trainingModules.update(mod.id, { completed: !mod.completed });
     };
@@ -644,16 +591,14 @@ const TrainingDashboard = () => {
                             <span className={cn(mod.completed && 'line-through text-neutral-500')}>{mod.title}</span>
                         </div>
                     </AccordionTrigger>
-                    <AccordionContent>
-                        This is the content for the training module. In a real app, this would contain text, images, or videos.
-                    </AccordionContent>
+                    <AccordionContent>This is the content for the training module. In a real app, this would contain text, images, or videos.</AccordionContent>
                 </AccordionItem>
             ))}
         </Accordion>
     );
 };
 const AiDashboard = () => {
-    const messages = useLiveQuery(() => db.aiMessages.orderBy('timestamp').toArray(), []);
+    const messages = useRealtimeQuery<AiMessage>(() => db.aiMessages.orderBy('timestamp').toArray());
     const [input, setInput] = useState('');
     const handleSend = async () => {
         if (!input.trim()) return;
@@ -698,14 +643,25 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
     if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', handleMessage);
     return () => { if ('serviceWorker' in navigator) navigator.serviceWorker.removeEventListener('message', handleMessage); };
   }, []);
-  const handleManualSync = () => {
+  const handleManualSync = async () => {
     if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) {
       toast.error("Service Worker not available for sync.");
       return;
     }
     setIsSyncing(true);
     setSyncProgress(0);
+    const outboxItems = await db.outbox.toArray();
+    if (outboxItems.length === 0) {
+        toast.info("No items to sync.");
+        setIsSyncing(false);
+        return;
+    }
     navigator.serviceWorker.controller.postMessage({ type: 'MANUAL_SYNC' });
+    // Simulate API call and clear outbox
+    setTimeout(async () => {
+        await db.outbox.clear();
+        toast.success(`${outboxItems.length} items synced.`);
+    }, 2500); // Corresponds to the 5*500ms interval in SW
   };
   const clearDatabase = async () => {
     try {
