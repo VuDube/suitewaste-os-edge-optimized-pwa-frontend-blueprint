@@ -38,7 +38,7 @@ export class TaskEntity extends IndexedEntity<Task> {
   static readonly indexName = "tasks";
   static readonly initialState: Task = { id: "", title: "", status: "pending", assignedTo: "", dueDate: 0 };
   static seedData: Readonly<Task[]> = Array.from({ length: 20 }, (_, i) => ({
-    id: crypto.randomUUID(),
+    id: `task-${(i + 1).toString().padStart(3, '0')}`,
     title: `Task #${i + 1}: Collect from Client ${String.fromCharCode(65 + (i % 10))}`,
     status: i % 3 === 0 ? 'completed' as const : 'pending' as const,
     assignedTo: 'manager-id-placeholder',
@@ -50,8 +50,8 @@ export class PaymentEntity extends IndexedEntity<Payment> {
   static readonly indexName = "payments";
   static readonly initialState: Payment = { id: "", amount: 0, status: "due", client: "", date: 0 };
   static seedData: Readonly<Payment[]> = Array.from({ length: 15 }, (_, i) => ({
-    id: crypto.randomUUID(),
-    amount: Math.floor(Math.random() * 5000) + 1000,
+    id: `payment-${(i + 1).toString().padStart(3, '0')}`,
+    amount: 1000 + ((i * 173) % 4001),
     status: i % 4 === 0 ? 'due' as const : 'paid' as const,
     client: `Client Corp ${String.fromCharCode(65 + (i % 10))}`,
     date: Date.now() - i * 7 * 86400000,
@@ -62,9 +62,9 @@ export class ComplianceLogEntity extends IndexedEntity<ComplianceLog> {
   static readonly indexName = "compliancelogs";
   static readonly initialState: ComplianceLog = { id: "", description: "", compliant: false, timestamp: 0 };
   static seedData: Readonly<ComplianceLog[]> = Array.from({ length: 25 }, (_, i) => ({
-    id: crypto.randomUUID(),
+    id: `compliancelog-${(i + 1).toString().padStart(3, '0')}`,
     description: `Log entry for site visit ${i + 1}. Checked safety protocols.`,
-    compliant: Math.random() > 0.2,
+    compliant: ((i * 131) % 5 !== 0),
     timestamp: Date.now() - i * 3 * 86400000,
   }));
 }
@@ -73,10 +73,10 @@ export class TrainingModuleEntity extends IndexedEntity<TrainingModule> {
   static readonly indexName = "trainingmodules";
   static readonly initialState: TrainingModule = { id: "", title: "", content: "", completed: false };
   static seedData: Readonly<TrainingModule[]> = [
-    { id: crypto.randomUUID(), title: 'Safety Protocols 101', content: '...', completed: true },
-    { id: crypto.randomUUID(), title: 'Waste Handling Procedures', content: '...', completed: true },
-    { id: crypto.randomUUID(), title: 'Emergency Response', content: '...', completed: false },
-    { id: crypto.randomUUID(), title: 'Client Communication', content: '...', completed: false },
+    { id: 'training-001', title: 'Safety Protocols 101', content: '...', completed: true },
+    { id: 'training-002', title: 'Waste Handling Procedures', content: '...', completed: true },
+    { id: 'training-003', title: 'Emergency Response', content: '...', completed: false },
+    { id: 'training-004', title: 'Client Communication', content: '...', completed: false },
   ];
 }
 export class AiMessageEntity extends IndexedEntity<AiMessage> {
@@ -84,6 +84,6 @@ export class AiMessageEntity extends IndexedEntity<AiMessage> {
   static readonly indexName = "aimessages";
   static readonly initialState: AiMessage = { id: "", role: "ai", content: "", timestamp: 0 };
   static seedData: Readonly<AiMessage[]> = [
-    { id: crypto.randomUUID(), role: 'ai' as const, content: 'Welcome to AI Assist. How can I help you optimize operations today?', timestamp: Date.now() - 10000 },
+    { id: 'ai-001', role: 'ai' as const, content: 'Welcome to AI Assist. How can I help you optimize operations today?', timestamp: Date.now() - 10000 },
   ];
 }

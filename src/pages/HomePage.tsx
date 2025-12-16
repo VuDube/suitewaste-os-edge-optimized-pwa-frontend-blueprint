@@ -63,11 +63,21 @@ class SuiteWasteDB extends Dexie {
       { email: 'trainer@suitewaste.os', name: 'Training Officer', role: 'Training Officer', permissions: ['training', 'ai'] },
     ];
     const passwordHash = await hashText('Auditor123');
-    await this.transaction('rw', this.users, async () => {
-      for (const u of demoUsers) {
-        await this.users.put({ id: uuidv4(), passwordHash, ...u });
+await this.transaction('rw', this.users, async () => {
+  for (const u of demoUsers) {
+    try {
+      await this.users.put({ id: uuidv4(), passwordHash, ...u });
+    } catch (e) {
+      // If the email already exists (unique index violation), skip inserting this demo user
+      if ((e as any)?.name === 'ConstraintError') {
+        console.log(`Skipping demo user ${u.email}: already exists`);
+        continue;
       }
-    });
+      // Re‑throw unexpected errors
+      throw e;
+    }
+  }
+});
     const manager = await this.users.where({ role: 'Operations Manager' }).first();
     if (!manager) return;
     await this.transaction('rw', this.tasks, this.payments, this.complianceLogs, this.trainingModules, this.aiMessages, async () => {
