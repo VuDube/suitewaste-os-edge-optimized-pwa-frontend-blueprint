@@ -1,63 +1,240 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { AnimatePresence, motion, useDragControls } from 'framer-motion';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import {
-  Briefcase,
-  CreditCard,
-  ShieldCheck,
-  BookOpen,
-  Bot,
-  Settings,
-  LogOut,
-  Loader,
-  WifiOff,
-  CheckCircle,
-  XCircle,
-  ArrowRight,
-  Menu,
-  Clock,
-  Battery,
-  Signal,
-  Trash2,
-  Lock,
-  Mail,
+  Briefcase, CreditCard, ShieldCheck, BookOpen, Bot, Settings, LogOut, Loader, WifiOff, CheckCircle,
+  ArrowRight, Menu, Battery, Signal, Trash2, Lock, Mail, PlusCircle, ArrowLeft, Send, BarChart, ListChecks,
+  Book, Check, X, Search, Download, Edit, Maximize
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
-import { db, type User } from '@/lib/db';
+import Dexie, { type Table } from 'dexie';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { useGesture } from '@use-gesture/react';
+import { v4 as uuidv4 } from 'uuid';
+import { hashText } from '@/lib/fast-hash';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Progress } from '@/components/ui/progress';
-import { SuiteIcon } from '@/components/ui/SuiteIcon';
-import { useFlowState } from '@/hooks/use-flow-state';
-import { cn } from '@/lib/utils';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
+import { cn } from '@/lib/utils';
+import { BarChart as RechartsBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 // --- Constants and Types ---
 const BIO_GREEN = '#2E7D32';
 const OLED_BLACK = '#0f0f0f';
-const loginSchema = z.object({
-  email: z.string().email('Invalid email address'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
-});
-type SuiteKey = 'operations' | 'payments' | 'compliance' | 'training' | 'ai';
-const SUITES: { key: SuiteKey; label: string; icon: React.ElementType; permissions: string[] }[] = [
-  { key: 'operations', label: 'Routes & Tasks', icon: Briefcase, permissions: ['operations'] },
-  { key: 'payments', label: 'Finance Center', icon: CreditCard, permissions: ['payments'] },
-  { key: 'compliance', label: 'Compliance Reports', icon: ShieldCheck, permissions: ['compliance'] },
-  { key: 'training', label: 'Training Hub', icon: BookOpen, permissions: ['training'] },
-  { key: 'ai', label: 'AI Assist', icon: Bot, permissions: ['ai'] },
-];
+// --- Database Definition (Inlined from db.ts) ---
+export interface User {
+  id: string;
+  email: string;
+  passwordHash: string;
+  role: 'Field Operator' | 'Operations Manager' | 'Compliance/Audit Officer' | 'Executive' | 'Training Officer';
+  permissions: string[];
+}
+export interface Session { id: string; userId: string; createdAt: number; }
+export interface Task { id: string; title: string; status: 'pending' | 'completed'; assignedTo: string; dueDate: number; }
+export interface Payment { id: string; amount: number; status: 'paid' | 'due'; client: string; date: number; }
+export interface ComplianceLog { id: string; description: string; compliant: boolean; timestamp: number; }
+export interface TrainingModule { id: string; title: string; content: string; completed: boolean; }
+export interface AiMessage { id: string; role: 'user' | 'ai'; content: string; timestamp: number; }
+export interface OutboxItem { id: string; type: string; payload: any; timestamp: number; }
+export class SuiteWasteDB extends Dexie {
+  users!: Table<User>;
+  sessions!: Table<Session>;
+  tasks!: Table<Task>;
+  payments!: Table<Payment>;
+  complianceLogs!: Table<ComplianceLog>;
+  trainingModules!: Table<TrainingModule>;
+  aiMessages!: Table<AiMessage>;
+  outbox!: Table<OutboxItem>;
+  constructor() {
+    super('SuiteWasteDB');
+    this.version(2).stores({
+      users: '++id, &email',
+      sessions: '++id, userId',
+      tasks: '++id, status, assignedTo, dueDate',
+      payments: '++id, status, date',
+      complianceLogs: '++id, compliant, timestamp',
+      trainingModules: '++id, completed',
+      aiMessages: '++id, timestamp',
+      outbox: '++id, timestamp',
+    });
+  }
+  async seedIfEmpty() {
+    const userCount = await this.users.count();
+    if (userCount > 0) return;
+    console.log("Database is empty, seeding demo data...");
+    const demoUsers = [
+      { email: 'field@suitewaste.os', role: 'Field Operator', permissions: ['operations', 'training'] },
+      { email: 'manager@suitewaste.os', role: 'Operations Manager', permissions: ['operations', 'payments', 'compliance', 'training', 'ai'] },
+      { email: 'auditor@suitewaste.os', role: 'Compliance/Audit Officer', permissions: ['compliance', 'training'] },
+      { email: 'executive@suitewaste.os', role: 'Executive', permissions: ['payments', 'compliance', 'ai'] },
+      { email: 'trainer@suitewaste.os', role: 'Training Officer', permissions: ['training', 'ai'] },
+    ];
+    const passwordHash = await hashText('Auditor123');
+    await this.transaction('rw', this.users, async () => {
+      for (const u of demoUsers) {
+        const existing = await this.users.where({ email: u.email }).first();
+        if (!existing) {
+          await this.users.put({ id: uuidv4(), passwordHash, ...u });
+        }
+      }
+    });
+    const manager = await this.users.where({ role: 'Operations Manager' }).first();
+    if (!manager) return;
+    await this.transaction('rw', this.tasks, this.payments, this.complianceLogs, this.trainingModules, this.aiMessages, async () => {
+        // Seed Tasks
+        if (await this.tasks.count() === 0) {
+            const tasksToSeed: Omit<Task, 'id'>[] = Array.from({ length: 20 }, (_, i) => ({
+                title: `Task #${i + 1}: Collect from Client ${String.fromCharCode(65 + (i % 10))}`,
+                status: i % 3 === 0 ? 'completed' : 'pending',
+                assignedTo: manager.id,
+                dueDate: Date.now() + (i - 10) * 24 * 60 * 60 * 1000,
+            }));
+            await this.tasks.bulkAdd(tasksToSeed.map(t => ({...t, id: uuidv4()})));
+        }
+        // Seed Payments
+        if (await this.payments.count() === 0) {
+            const paymentsToSeed: Omit<Payment, 'id'>[] = Array.from({ length: 15 }, (_, i) => ({
+                amount: Math.floor(Math.random() * 5000) + 1000,
+                status: i % 4 === 0 ? 'due' : 'paid',
+                client: `Client Corp ${String.fromCharCode(65 + (i % 10))}`,
+                date: Date.now() - i * 7 * 24 * 60 * 60 * 1000,
+            }));
+            await this.payments.bulkAdd(paymentsToSeed.map(p => ({...p, id: uuidv4()})));
+        }
+        // Seed Compliance Logs
+        if (await this.complianceLogs.count() === 0) {
+            const logsToSeed: Omit<ComplianceLog, 'id'>[] = Array.from({ length: 25 }, (_, i) => ({
+                description: `Log entry for site visit ${i + 1}. Checked safety protocols.`,
+                compliant: Math.random() > 0.2,
+                timestamp: Date.now() - i * 3 * 24 * 60 * 60 * 1000,
+            }));
+            await this.complianceLogs.bulkAdd(logsToSeed.map(l => ({...l, id: uuidv4()})));
+        }
+        // Seed Training Modules
+        if (await this.trainingModules.count() === 0) {
+            const modulesToSeed: Omit<TrainingModule, 'id'>[] = [
+                { title: 'Safety Protocols 101', content: '...', completed: true },
+                { title: 'Waste Handling Procedures', content: '...', completed: true },
+                { title: 'Emergency Response', content: '...', completed: false },
+                { title: 'Client Communication', content: '...', completed: false },
+            ];
+            await this.trainingModules.bulkAdd(modulesToSeed.map(m => ({...m, id: uuidv4()})));
+        }
+        // Seed AI Messages
+        if (await this.aiMessages.count() === 0) {
+            const messagesToSeed: Omit<AiMessage, 'id'>[] = [
+                { role: 'ai', content: 'Welcome to AI Assist. How can I help you optimize operations today?', timestamp: Date.now() - 10000 },
+            ];
+            await this.aiMessages.bulkAdd(messagesToSeed.map(m => ({...m, id: uuidv4()})));
+        }
+    });
+    toast.success("Demo data seeded successfully.");
+  }
+  async signIn(email: string, password: string): Promise<User | null> {
+    const user = await this.users.where({ email }).first();
+    if (!user) return null;
+    const inputHash = await hashText(password);
+    if (inputHash === user.passwordHash) {
+      await this.sessions.clear();
+      await this.sessions.add({ id: uuidv4(), userId: user.id, createdAt: Date.now() });
+      return user;
+    }
+    return null;
+  }
+  async signOut() { await this.sessions.clear(); }
+  async getCurrentUser(): Promise<User | null> {
+    const session = await this.sessions.orderBy('createdAt').last();
+    if (!session) return null;
+    return this.users.get(session.userId) ?? null;
+  }
+}
+export const db = new SuiteWasteDB();
+// --- Service Worker (Inlined as Blob) ---
+const swCode = `
+  const CACHE_NAME = 'suitewaste-os-cache-v1';
+  const APP_SHELL_URLS = [
+    '/',
+    '/index.html',
+    // Add other critical assets here if they are not inlined
+  ];
+  self.addEventListener('install', event => {
+    event.waitUntil(
+      caches.open(CACHE_NAME).then(cache => {
+        console.log('Opened cache');
+        return cache.addAll(APP_SHELL_URLS);
+      })
+    );
+  });
+  self.addEventListener('fetch', event => {
+    if (event.request.url.includes('/api/')) {
+      event.respondWith(
+        fetch(event.request).catch(() => {
+          return new Response(JSON.stringify({ success: false, error: 'Offline' }), {
+            headers: { 'Content-Type': 'application/json' }
+          });
+        })
+      );
+    } else {
+      event.respondWith(
+        caches.match(event.request).then(response => {
+          return response || fetch(event.request);
+        })
+      );
+    }
+  });
+  self.addEventListener('message', event => {
+    if (event.data && event.data.type === 'MANUAL_SYNC') {
+      console.log('Manual sync initiated from client.');
+      // Simulate a sync process
+      let progress = 0;
+      const interval = setInterval(() => {
+        progress += 20;
+        self.clients.matchAll().then(clients => {
+          clients.forEach(client => client.postMessage({ type: 'SYNC_PROGRESS', progress }));
+        });
+        if (progress >= 100) {
+          clearInterval(interval);
+          self.clients.matchAll().then(clients => {
+            clients.forEach(client => client.postMessage({ type: 'SYNC_COMPLETE' }));
+          });
+        }
+      }, 500);
+    }
+  });
+`;
+// --- Inlined Components ---
+const SuiteIcon = React.forwardRef<HTMLButtonElement, { icon: React.ElementType; label: string; className?: string; iconClassName?: string; onClick?: () => void }>(
+  ({ icon: Icon, label, className, iconClassName, onClick }, ref) => (
+    <motion.button
+      ref={ref}
+      onClick={onClick}
+      className={cn("flex flex-col items-center justify-center text-center space-y-2 w-20 h-20 rounded-3xl transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-black focus-visible:ring-green-400", className)}
+      variants={{
+        hover: { scale: 1.1, boxShadow: '0 0 20px rgba(46, 125, 50, 0.7)' },
+        tap: { scale: 0.95 }
+      }}
+      whileHover="hover"
+      whileTap="tap"
+    >
+      <Icon className={cn("w-8 h-8 text-white", iconClassName)} />
+      <span className="text-xs font-medium text-white/90 tracking-tight">{label}</span>
+    </motion.button>
+  )
+);
+SuiteIcon.displayName = 'SuiteIcon';
 // --- Main App Component ---
 export function HomePage() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeSuite, setActiveSuite] = useState<SuiteKey | null>(null);
   const checkSession = useCallback(async () => {
     try {
+      await db.open();
       await db.seedIfEmpty();
       const user = await db.getCurrentUser();
       setCurrentUser(user);
@@ -69,47 +246,44 @@ export function HomePage() {
     }
   }, []);
   useEffect(() => {
-    // Register Service Worker
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/service-worker.js')
-          .then(registration => console.log('SW registered: ', registration))
-          .catch(registrationError => console.log('SW registration failed: ', registrationError));
-      });
+      const swBlob = new Blob([swCode], { type: 'application/javascript' });
+      const swUrl = URL.createObjectURL(swBlob);
+      navigator.serviceWorker.register(swUrl)
+        .then(reg => console.log('SW registered from Blob: ', reg))
+        .catch(err => console.log('SW registration failed: ', err));
     }
     checkSession();
   }, [checkSession]);
-  const handleLoginSuccess = (user: User) => {
-    setCurrentUser(user);
-    setActiveSuite(null);
-  };
+  const handleLoginSuccess = (user: User) => setCurrentUser(user);
   const handleLogout = async () => {
     await db.signOut();
     setCurrentUser(null);
-    setActiveSuite(null);
     toast.success("You have been logged out.");
   };
-  if (isLoading) {
-    return <LoadingScreen />;
-  }
+  if (isLoading) return <LoadingScreen />;
   return (
-    <div className="bg-black text-white min-h-screen font-sans antialiased">
-      <AnimatePresence mode="wait">
-        {currentUser ? (
-          <motion.div key="app" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <SuiteWasteOS user={currentUser} onLogout={handleLogout} activeSuite={activeSuite} setActiveSuite={setActiveSuite} />
-          </motion.div>
-        ) : (
-          <motion.div key="login" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <LoginScreen onLoginSuccess={handleLoginSuccess} />
-          </motion.div>
-        )}
-      </AnimatePresence>
+    <div className="bg-black text-white min-h-screen font-sans antialiased" style={{ backgroundColor: OLED_BLACK }}>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="py-8 md:py-10 lg:py-12">
+          <AnimatePresence mode="wait">
+            {currentUser ? (
+              <motion.div key="app" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                <SuiteWasteOS user={currentUser} onLogout={handleLogout} />
+              </motion.div>
+            ) : (
+              <motion.div key="login" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                <LoginScreen onLoginSuccess={handleLoginSuccess} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
       <Toaster theme="dark" richColors position="top-center" />
     </div>
   );
 }
-// --- Loading Screen ---
+// --- Loading & Login Screens ---
 const LoadingScreen = () => (
   <div style={{ backgroundColor: OLED_BLACK }} className="w-full h-screen flex flex-col items-center justify-center gap-4">
     <img src="https://i.imgur.com/Jt5g2S6.png" alt="SuiteWaste Logo" className="w-24 h-24 animate-pulse" />
@@ -117,7 +291,10 @@ const LoadingScreen = () => (
     <p className="text-white/60">Initializing SuiteWaste OS...</p>
   </div>
 );
-// --- Login Screen ---
+const loginSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(6, 'Password must be at least 6 characters'),
+});
 const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (user: User) => void }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const form = useForm<z.infer<typeof loginSchema>>({
@@ -133,7 +310,6 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (user: User) => void 
         onLoginSuccess(user);
       } else {
         toast.error("Invalid email or password.");
-        form.setError("email", { type: "manual", message: " " });
         form.setError("password", { type: "manual", message: "Invalid credentials" });
       }
     } catch (error) {
@@ -144,89 +320,88 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (user: User) => void 
   };
   return (
     <div
-      style={{ background: 'linear-gradient(135deg, #2E7D32 0%, #1B5E20 50%, #0D47A1 100%)' }}
-      className="min-h-screen flex flex-col items-center justify-center p-4"
+      style={{ background: `linear-gradient(135deg, ${BIO_GREEN} 0%, #1B5E20 100%)` }}
+      className="min-h-screen flex flex-col items-center justify-center p-4 -m-8 md:-m-10 lg:-m-12"
     >
       <div className="w-full max-w-md mx-auto">
-        <div className="text-center mb-8">
-          <img src="https://i.imgur.com/Jt5g2S6.png" alt="SuiteWaste Logo" className="w-32 h-32 mx-auto mb-4 shadow-glow" />
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="text-center mb-8"
+        >
+          <img src="https://i.imgur.com/Jt5g2S6.png" alt="SuiteWaste Logo" className="w-32 h-32 mx-auto mb-4" style={{ filter: 'drop-shadow(0 0 15px rgba(46, 125, 50, 0.8))' }} />
           <h1 className="text-4xl font-bold text-white">SuiteWaste OS</h1>
-          <p className="text-lg text-gray-300">Industrial Waste Management</p>
-        </div>
-        <div className="bg-green-900/10 backdrop-blur-xl border border-green-500/20 rounded-2xl p-8 shadow-xl">
+          <p className="text-lg text-gray-300">Edge-Optimized Waste Management</p>
+        </motion.div>
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.5, delay: 0.2 }}
+          className="bg-black/10 backdrop-blur-2xl border border-white/10 rounded-3xl p-8 shadow-[0_8px_32px_rgba(0,0,0,0.37)]"
+        >
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-              <FormField
-                control={form.control}
-                name="email"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-gray-200 uppercase text-xs font-bold">Work Email</FormLabel>
-                    <FormControl>
-                      <div className="relative flex items-center">
-                        <Mail className="absolute left-3 w-5 h-5 text-green-300" />
-                        <Input
-                          type="email"
-                          placeholder="admin@suitewaste.os"
-                          className="bg-green-900/20 border border-green-500/30 text-white placeholder:text-gray-400 rounded-xl pl-10 pr-4 py-3 h-12"
-                          {...field}
-                        />
-                      </div>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="password"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-gray-200 uppercase text-xs font-bold">Password</FormLabel>
-                    <FormControl>
-                      <div className="relative flex items-center">
-                        <Lock className="absolute left-3 w-5 h-5 text-green-300" />
-                        <Input
-                          type="password"
-                          placeholder="••••••••"
-                          className="bg-green-900/20 border border-green-500/30 text-white placeholder:text-gray-400 rounded-xl pl-10 pr-4 py-3 h-12"
-                          {...field}
-                        />
-                      </div>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              <FormField control={form.control} name="email" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-gray-200 uppercase text-xs font-bold">Work Email</FormLabel>
+                  <FormControl>
+                    <div className="relative flex items-center">
+                      <Mail className="absolute left-3 w-5 h-5 text-green-300" />
+                      <Input type="email" placeholder="manager@suitewaste.os" className="bg-black/20 border border-white/10 text-white placeholder:text-gray-400 rounded-xl pl-10 pr-4 py-3 h-12" {...field} />
+                    </div>
+                  </FormControl><FormMessage />
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="password" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-gray-200 uppercase text-xs font-bold">Password</FormLabel>
+                  <FormControl>
+                    <div className="relative flex items-center">
+                      <Lock className="absolute left-3 w-5 h-5 text-green-300" />
+                      <Input type="password" placeholder="••••••••" className="bg-black/20 border border-white/10 text-white placeholder:text-gray-400 rounded-xl pl-10 pr-4 py-3 h-12" {...field} />
+                    </div>
+                  </FormControl><FormMessage />
+                </FormItem>
+              )} />
               <div className="flex items-center justify-between text-sm">
                 <div className="flex items-center space-x-2">
-                  <Checkbox id="remember-me" className="border-white data-[state=checked]:bg-white data-[state=checked]:text-green-900" />
+                  <Checkbox id="remember-me" className="border-white/50 data-[state=checked]:bg-green-500 data-[state=checked]:text-white" />
                   <label htmlFor="remember-me" className="text-gray-200">Remember me</label>
                 </div>
-                <a href="#" className="text-green-200 underline hover:text-white">Reset password?</a>
+                <a href="#" className="text-green-300 hover:text-white transition">Reset password?</a>
               </div>
-              <Button
-                type="submit"
-                className="w-full bg-white text-green-900 font-bold py-4 h-14 text-base rounded-xl transition-all duration-300 hover:scale-105 active:scale-100 flex items-center justify-center"
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? <Loader className="animate-spin" /> : (
-                  <>
-                    Sign In to System
-                    <ArrowRight className="ml-2 h-5 w-5" />
-                  </>
-                )}
+              <Button type="submit" className="w-full bg-white text-green-900 font-bold py-4 h-14 text-base rounded-xl transition-all duration-300 hover:scale-105 active:scale-100 flex items-center justify-center" disabled={isSubmitting}>
+                {isSubmitting ? <Loader className="animate-spin" /> : <><ArrowRight className="mr-2 h-5 w-5" /> Secure Sign In</>}
               </Button>
             </form>
           </Form>
-        </div>
+        </motion.div>
       </div>
     </div>
   );
 };
-// --- Main OS Interface ---
-const SuiteWasteOS = ({ user, onLogout, activeSuite, setActiveSuite }: { user: User; onLogout: () => void; activeSuite: SuiteKey | null; setActiveSuite: (suite: SuiteKey | null) => void; }) => {
-  const { isSwitcherOpen, openSwitcher, closeSwitcher, bindSuiteGesture } = useFlowState();
+// --- Main OS Interface & State Management ---
+type SuiteKey = 'operations' | 'payments' | 'compliance' | 'training' | 'ai';
+const SUITES: { key: SuiteKey; label: string; icon: React.ElementType; permissions: string[] }[] = [
+  { key: 'operations', label: 'Routes & Tasks', icon: Briefcase, permissions: ['operations'] },
+  { key: 'payments', label: 'Finance Center', icon: CreditCard, permissions: ['payments'] },
+  { key: 'compliance', label: 'Compliance', icon: ShieldCheck, permissions: ['compliance'] },
+  { key: 'training', label: 'Training Hub', icon: BookOpen, permissions: ['training'] },
+  { key: 'ai', label: 'AI Assist', icon: Bot, permissions: ['ai'] },
+];
+const SuiteWasteOS = ({ user, onLogout }: { user: User; onLogout: () => void; }) => {
+  const [activeSuite, setActiveSuite] = useState<SuiteKey | null>(null);
+  const [isSwitcherOpen, setSwitcherOpen] = useState(false);
+  const openSwitcher = () => setSwitcherOpen(true);
+  const closeSwitcher = () => setSwitcherOpen(false);
+  const bindSuiteGesture = useGesture({
+    onDrag: ({ event, touches, down, movement: [mx], velocity: [vx], direction: [dx] }) => {
+      if (event.touches?.length === 2 && Math.abs(mx) > 50 && Math.abs(vx) > 0.5) {
+        if (!isSwitcherOpen) openSwitcher();
+      }
+    },
+  });
   const availableSuites = useMemo(() =>
     SUITES.filter(suite => suite.permissions.some(p => user.permissions.includes(p))),
     [user.permissions]
@@ -236,52 +411,26 @@ const SuiteWasteOS = ({ user, onLogout, activeSuite, setActiveSuite }: { user: U
     closeSwitcher();
   };
   return (
-    <FlowStateLayout>
+    <div className="h-[calc(100vh-4rem)] md:h-[calc(100vh-5rem)] lg:h-[calc(100vh-6rem)] max-w-lg mx-auto flex flex-col bg-black/80 rounded-3xl shadow-2xl overflow-hidden border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.37)]" {...bindSuiteGesture()}>
       <StatusBar />
-      <div className="flex-grow overflow-y-auto p-4 sm:p-6 lg:p-8" {...bindSuiteGesture()}>
+      <div className="flex-grow overflow-y-auto p-1 sm:p-2 lg:p-4">
         <AnimatePresence mode="wait">
           {activeSuite ? (
-            <motion.div
-              key={activeSuite}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.3 }}
-            >
+            <motion.div key={activeSuite} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.3 }}>
               <DashboardView suiteKey={activeSuite} onBack={() => setActiveSuite(null)} />
             </motion.div>
           ) : (
-            <motion.div
-              key="homescreen"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-            >
-              <Homescreen availableSuites={availableSuites} onSuiteSelect={handleSuiteSelect} />
+            <motion.div key="homescreen" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}>
+              <Homescreen user={user} availableSuites={availableSuites} onSuiteSelect={handleSuiteSelect} />
             </motion.div>
           )}
         </AnimatePresence>
       </div>
       <Dock onSwitcherOpen={openSwitcher} onLogout={onLogout} />
-      <SuiteSwitcher
-        isOpen={isSwitcherOpen}
-        onClose={closeSwitcher}
-        availableSuites={availableSuites}
-        onSuiteSelect={handleSuiteSelect}
-      />
-    </FlowStateLayout>
+      <SuiteSwitcher isOpen={isSwitcherOpen} onClose={closeSwitcher} availableSuites={availableSuites} onSuiteSelect={handleSuiteSelect} />
+    </div>
   );
 };
-const FlowStateLayout = ({ children }: { children: React.ReactNode }) => (
-  <div
-    style={{ background: 'linear-gradient(135deg, #2E7D32 0%, #1B5E20 50%, #0D47A1 100%)' }}
-    className="min-h-screen flex flex-col"
-  >
-    <div className="max-w-2xl mx-auto h-screen flex flex-col bg-black/50 rounded-lg shadow-2xl overflow-hidden border border-green-500/20">
-      {children}
-    </div>
-  </div>
-);
 const StatusBar = () => {
   const [time, setTime] = useState(new Date());
   useEffect(() => {
@@ -289,7 +438,7 @@ const StatusBar = () => {
     return () => clearInterval(timer);
   }, []);
   return (
-    <div className="w-full px-4 py-1 flex justify-between items-center text-xs font-medium text-neutral-300 bg-green-900/20 border-b border-green-500/20">
+    <div className="w-full px-4 py-1 flex justify-between items-center text-xs font-medium text-neutral-300 bg-black/20 backdrop-blur-sm border-b border-white/10">
       <div>{time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
       <div className="flex items-center gap-2">
         <Signal size={14} />
@@ -299,25 +448,19 @@ const StatusBar = () => {
     </div>
   );
 };
-const Homescreen = ({ availableSuites, onSuiteSelect }: { availableSuites: typeof SUITES; onSuiteSelect: (key: SuiteKey) => void; }) => (
-  <div className="py-12">
-    <h2 className="text-3xl font-bold text-center mb-12 text-white">Welcome, {availableSuites.length > 3 ? "Manager" : "Operator"}</h2>
+const Homescreen = ({ user, availableSuites, onSuiteSelect }: { user: User; availableSuites: typeof SUITES; onSuiteSelect: (key: SuiteKey) => void; }) => (
+  <div className="py-8">
+    <h2 className="text-3xl font-bold text-center mb-10 text-white">Welcome, {user.role}</h2>
     <div className="grid grid-cols-3 sm:grid-cols-4 gap-y-8 gap-x-4 justify-items-center">
       {availableSuites.map(suite => (
-        <SuiteIcon
-          key={suite.key}
-          icon={suite.icon}
-          label={suite.label}
-          onClick={() => onSuiteSelect(suite.key)}
-          className="bg-green-500/10 hover:bg-green-500/20 border-green-500/20 shadow-lg shadow-green-900/50"
-        />
+        <SuiteIcon key={suite.key} icon={suite.icon} label={suite.label} onClick={() => onSuiteSelect(suite.key)} className="bg-white/5 hover:bg-white/10 border-white/10" />
       ))}
     </div>
   </div>
 );
 const Dock = ({ onSwitcherOpen, onLogout }: { onSwitcherOpen: () => void; onLogout: () => void; }) => (
   <div className="w-full p-2">
-    <div className="bg-green-900/20 border border-green-500/20 backdrop-blur-lg rounded-full flex justify-around items-center h-16">
+    <div className="bg-black/20 border border-white/10 backdrop-blur-lg rounded-full flex justify-around items-center h-16">
       <Button variant="ghost" size="icon" className="rounded-full text-white/70 hover:text-white" onClick={onSwitcherOpen}><Menu /></Button>
       <SettingsSheet onLogout={onLogout} />
     </div>
@@ -326,94 +469,234 @@ const Dock = ({ onSwitcherOpen, onLogout }: { onSwitcherOpen: () => void; onLogo
 const SuiteSwitcher = ({ isOpen, onClose, availableSuites, onSuiteSelect }: { isOpen: boolean; onClose: () => void; availableSuites: typeof SUITES; onSuiteSelect: (key: SuiteKey) => void; }) => (
   <AnimatePresence>
     {isOpen && (
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={onClose}
-        className="fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center"
-      >
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center">
         <motion.div
-          initial={{ scale: 0.8, y: 50 }}
-          animate={{ scale: 1, y: 0 }}
-          exit={{ scale: 0.8, y: 50 }}
+          drag="x" dragConstraints={{ left: 0, right: 0 }}
+          initial={{ scale: 0.8, y: 50 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.8, y: 50 }}
           transition={{ type: 'spring', damping: 20, stiffness: 300 }}
-          className="w-full max-w-md p-4"
+          className="w-full max-w-md p-4 flex justify-center items-center gap-4"
           onClick={e => e.stopPropagation()}
+          style={{ perspective: 1000 }}
         >
-          <div className="flex justify-center items-center gap-4">
-            {availableSuites.map((suite, index) => (
-              <motion.div
-                key={suite.key}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0, transition: { delay: index * 0.05 } }}
-              >
-                <SuiteIcon
-                  icon={suite.icon}
-                  label={suite.label}
-                  onClick={() => onSuiteSelect(suite.key)}
-                  className="w-24 h-24 md:w-28 md:h-28 bg-green-500/10 hover:bg-green-500/20 border-green-500/20 shadow-lg shadow-green-900/50"
-                  iconClassName="w-12 h-12 md:w-14 md:h-14"
-                />
-              </motion.div>
-            ))}
-          </div>
+          {availableSuites.map((suite, index) => (
+            <motion.div key={suite.key}
+              initial={{ opacity: 0, y: 20, rotateY: -30 }}
+              animate={{ opacity: 1, y: 0, rotateY: 0, transition: { delay: index * 0.08 } }}
+              style={{ transformStyle: 'preserve-3d' }}
+            >
+              <SuiteIcon icon={suite.icon} label={suite.label} onClick={() => onSuiteSelect(suite.key)} className="w-24 h-24 md:w-28 md:h-28 bg-white/10 hover:bg-white/20 border-white/10" iconClassName="w-12 h-12 md:w-14 md:h-14" />
+            </motion.div>
+          ))}
         </motion.div>
       </motion.div>
     )}
   </AnimatePresence>
 );
+// --- Dashboards ---
 const DashboardView = ({ suiteKey, onBack }: { suiteKey: SuiteKey; onBack: () => void; }) => {
   const suite = SUITES.find(s => s.key === suiteKey);
   if (!suite) return <div>Suite not found</div>;
   const renderContent = () => {
     switch (suiteKey) {
-      case 'operations': return <p>Routes & Tasks dashboard content goes here. View your daily routes, manage tasks, and log e-waste.</p>;
-      case 'payments': return <p>Finance Center dashboard content. Review payments, generate invoices, and track financial performance.</p>;
-      case 'compliance': return <p>Compliance Reports dashboard. Access audit logs, view compliance status, and generate reports.</p>;
-      case 'training': return <p>Training Hub content. Complete modules, track progress, and access training materials.</p>;
-      case 'ai': return <p>AI Assist dashboard. Get insights, ask questions, and leverage AI for operational efficiency.</p>;
+      case 'operations': return <OperationsDashboard />;
+      case 'payments': return <PaymentsDashboard />;
+      case 'compliance': return <ComplianceDashboard />;
+      case 'training': return <TrainingDashboard />;
+      case 'ai': return <AiDashboard />;
       default: return <p>Dashboard coming soon.</p>;
     }
   };
   return (
-    <Card className="bg-green-900/10 border border-green-500/20 backdrop-blur-xl text-white rounded-2xl p-6 shadow-xl">
+    <Card className="bg-black/20 border border-white/10 backdrop-blur-xl text-white rounded-3xl p-4 shadow-glass h-full flex flex-col">
       <CardHeader className="flex flex-row items-center justify-between p-0 mb-4">
         <div className="flex items-center gap-4">
+          <Button variant="ghost" size="icon" onClick={onBack} className="text-white/80 hover:text-white hover:bg-white/10 rounded-full"><ArrowLeft /></Button>
           <suite.icon className="w-8 h-8" style={{ color: BIO_GREEN }} />
           <CardTitle className="text-2xl font-bold">{suite.label}</CardTitle>
         </div>
-        <Button variant="ghost" onClick={onBack} className="text-white/80 hover:text-white hover:bg-green-500/20">Back</Button>
       </CardHeader>
-      <CardContent className="text-neutral-300 p-0">
+      <CardContent className="text-neutral-300 p-0 flex-grow overflow-y-auto">
         {renderContent()}
       </CardContent>
     </Card>
   );
 };
+const OperationsDashboard = () => {
+    const tasks = useLiveQuery(() => db.tasks.orderBy('dueDate').toArray(), []);
+    const [newTaskTitle, setNewTaskTitle] = useState('');
+    const handleAddTask = async () => {
+        if (!newTaskTitle.trim()) return;
+        const manager = await db.users.where({ role: 'Operations Manager' }).first();
+        if (!manager) {
+            toast.error("Manager not found to assign task.");
+            return;
+        }
+        await db.tasks.add({
+            id: uuidv4(),
+            title: newTaskTitle,
+            status: 'pending',
+            assignedTo: manager.id,
+            dueDate: Date.now() + 24 * 60 * 60 * 1000,
+        });
+        setNewTaskTitle('');
+        toast.success("Task added!");
+    };
+    const toggleTaskStatus = (task: Task) => {
+        db.tasks.update(task.id, { status: task.status === 'pending' ? 'completed' : 'pending' });
+    };
+    return (
+        <div className="space-y-4">
+            <div className="flex gap-2">
+                <Input value={newTaskTitle} onChange={e => setNewTaskTitle(e.target.value)} placeholder="New task title..." className="bg-black/20 border-white/10" />
+                <Button onClick={handleAddTask} className="bg-green-600 hover:bg-green-700"><PlusCircle size={18} /></Button>
+            </div>
+            <ul className="space-y-2">
+                {tasks?.map(task => (
+                    <li key={task.id} onDoubleClick={() => toggleTaskStatus(task)} className="flex items-center justify-between p-3 bg-white/5 rounded-lg cursor-pointer">
+                        <span className={cn("flex-grow", task.status === 'completed' && 'line-through text-neutral-500')}>{task.title}</span>
+                        <Button size="icon" variant="ghost" onClick={() => toggleTaskStatus(task)}>
+                            {task.status === 'completed' ? <CheckCircle className="text-green-500" /> : <div className="w-5 h-5 rounded-full border-2 border-neutral-400" />}
+                        </Button>
+                    </li>
+                ))}
+            </ul>
+        </div>
+    );
+};
+const PaymentsDashboard = () => {
+    const payments = useLiveQuery(() => db.payments.orderBy('date').toArray(), []);
+    const chartData = useMemo(() => {
+        return payments?.reduce((acc, p) => {
+            const month = new Date(p.date).toLocaleString('default', { month: 'short' });
+            const existing = acc.find(item => item.name === month);
+            if (existing) {
+                if (p.status === 'paid') existing.paid += p.amount;
+                else existing.due += p.amount;
+            } else {
+                acc.push({ name: month, paid: p.status === 'paid' ? p.amount : 0, due: p.status === 'due' ? p.amount : 0 });
+            }
+            return acc;
+        }, [] as { name: string; paid: number; due: number }[]).reverse();
+    }, [payments]);
+    return (
+        <div className="space-y-4 h-[500px]">
+            <h3 className="text-xl font-semibold">Monthly Revenue</h3>
+            <ResponsiveContainer width="100%" height={250}>
+                <RechartsBarChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                    <XAxis dataKey="name" stroke="rgba(255,255,255,0.7)" />
+                    <YAxis stroke="rgba(255,255,255,0.7)" />
+                    <Tooltip contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.2)' }} />
+                    <Legend />
+                    <Bar dataKey="paid" fill="#2E7D32" />
+                    <Bar dataKey="due" fill="#b71c1c" />
+                </RechartsBarChart>
+            </ResponsiveContainer>
+            <h3 className="text-xl font-semibold">Recent Transactions</h3>
+            <ul className="space-y-2">
+                {payments?.slice(-5).reverse().map(p => (
+                    <li key={p.id} className="flex justify-between p-2 bg-white/5 rounded-lg">
+                        <span>{p.client}</span>
+                        <span className={cn(p.status === 'paid' ? 'text-green-400' : 'text-red-400')}>
+                            ${p.amount.toFixed(2)}
+                        </span>
+                    </li>
+                ))}
+            </ul>
+        </div>
+    );
+};
+const ComplianceDashboard = () => {
+    const logs = useLiveQuery(() => db.complianceLogs.orderBy('timestamp').reverse().toArray(), []);
+    const toggleCompliance = (log: ComplianceLog) => {
+        db.complianceLogs.update(log.id, { compliant: !log.compliant });
+    };
+    return (
+        <ul className="space-y-2">
+            {logs?.map(log => (
+                <li key={log.id} onDoubleClick={() => toggleCompliance(log)} className="flex items-center justify-between p-3 bg-white/5 rounded-lg cursor-pointer">
+                    <div className="flex-grow">
+                        <p>{log.description}</p>
+                        <p className="text-xs text-neutral-400">{new Date(log.timestamp).toLocaleDateString()}</p>
+                    </div>
+                    <Button size="icon" variant="ghost" onClick={() => toggleCompliance(log)}>
+                        {log.compliant ? <ShieldCheck className="text-green-500" /> : <XCircle className="text-red-500" />}
+                    </Button>
+                </li>
+            ))}
+        </ul>
+    );
+};
+const TrainingDashboard = () => {
+    const modules = useLiveQuery(() => db.trainingModules.toArray(), []);
+    const toggleModule = (mod: TrainingModule) => {
+        db.trainingModules.update(mod.id, { completed: !mod.completed });
+    };
+    return (
+        <Accordion type="single" collapsible className="w-full">
+            {modules?.map(mod => (
+                <AccordionItem value={mod.id} key={mod.id} className="border-white/10">
+                    <AccordionTrigger className="hover:no-underline">
+                        <div className="flex items-center gap-4 w-full">
+                            <Button size="icon" variant="ghost" onClick={(e) => { e.stopPropagation(); toggleModule(mod); }}>
+                                {mod.completed ? <CheckCircle className="text-green-500" /> : <div className="w-5 h-5 rounded-full border-2 border-neutral-400" />}
+                            </Button>
+                            <span className={cn(mod.completed && 'line-through text-neutral-500')}>{mod.title}</span>
+                        </div>
+                    </AccordionTrigger>
+                    <AccordionContent>
+                        This is the content for the training module. In a real app, this would contain text, images, or videos.
+                    </AccordionContent>
+                </AccordionItem>
+            ))}
+        </Accordion>
+    );
+};
+const AiDashboard = () => {
+    const messages = useLiveQuery(() => db.aiMessages.orderBy('timestamp').toArray(), []);
+    const [input, setInput] = useState('');
+    const handleSend = async () => {
+        if (!input.trim()) return;
+        const userMessage: AiMessage = { id: uuidv4(), role: 'user', content: input, timestamp: Date.now() };
+        await db.aiMessages.add(userMessage);
+        setInput('');
+        setTimeout(async () => {
+            const aiResponse: AiMessage = { id: uuidv4(), role: 'ai', content: `This is a simulated AI response to: "${input}"`, timestamp: Date.now() };
+            await db.aiMessages.add(aiResponse);
+        }, 1000);
+    };
+    return (
+        <div className="flex flex-col h-full">
+            <div className="flex-grow space-y-4 overflow-y-auto p-2">
+                {messages?.map(msg => (
+                    <div key={msg.id} className={cn("flex", msg.role === 'user' ? 'justify-end' : 'justify-start')}>
+                        <div className={cn("max-w-xs p-3 rounded-2xl", msg.role === 'user' ? 'bg-green-600 rounded-br-none' : 'bg-neutral-700 rounded-bl-none')}>
+                            {msg.content}
+                        </div>
+                    </div>
+                ))}
+            </div>
+            <div className="flex gap-2 p-2 border-t border-white/10">
+                <Input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSend()} placeholder="Ask AI..." className="bg-black/20 border-white/10" />
+                <Button onClick={handleSend} className="bg-green-600 hover:bg-green-700"><Send size={18} /></Button>
+            </div>
+        </div>
+    );
+};
+// --- Settings Sheet ---
 const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
   const [syncProgress, setSyncProgress] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (event.data.type === 'SYNC_PROGRESS') {
-        setSyncProgress(event.data.progress);
-      } else if (event.data.type === 'SYNC_COMPLETE') {
+      if (event.data.type === 'SYNC_PROGRESS') setSyncProgress(event.data.progress);
+      else if (event.data.type === 'SYNC_COMPLETE') {
         setSyncProgress(100);
-        setTimeout(() => {
-            setIsSyncing(false);
-            toast.success("Manual sync completed successfully.");
-        }, 500);
+        setTimeout(() => { setIsSyncing(false); toast.success("Manual sync completed."); }, 500);
       }
     };
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.addEventListener('message', handleMessage);
-    }
-    return () => {
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.removeEventListener('message', handleMessage);
-        }
-    };
+    if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', handleMessage);
+    return () => { if ('serviceWorker' in navigator) navigator.serviceWorker.removeEventListener('message', handleMessage); };
   }, []);
   const handleManualSync = () => {
     if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) {
@@ -426,12 +709,12 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
   };
   const clearDatabase = async () => {
     try {
-        await db.delete();
-        await db.open(); // Re-open the database
-        toast.success("Database cleared. Please refresh the application.");
-        setTimeout(() => window.location.reload(), 1500);
+      await db.delete();
+      await db.open();
+      toast.success("Database cleared. Please refresh the application.");
+      setTimeout(() => window.location.reload(), 1500);
     } catch (e) {
-        toast.error("Failed to clear database.");
+      toast.error("Failed to clear database.");
     }
   };
   return (
@@ -439,24 +722,20 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
       <SheetTrigger asChild>
         <Button variant="ghost" size="icon" className="rounded-full text-white/70 hover:text-white"><Settings /></Button>
       </SheetTrigger>
-      <SheetContent className="bg-green-900 border-l-green-500/20 text-white/90" aria-describedby="settings-description">
-        <span id="settings-description" className="sr-only">Settings panel for sync and account actions</span>
-        <SheetHeader>
-          <SheetTitle className="text-white">Settings</SheetTitle>
-        </SheetHeader>
+      <SheetContent className="bg-black/50 border-l-white/10 text-white/90 backdrop-blur-2xl" aria-describedby="settings-description">
+        <span id="settings-description" className="sr-only">Settings panel</span>
+        <SheetHeader><SheetTitle className="text-white">Settings</SheetTitle></SheetHeader>
         <div className="py-4 space-y-6">
           <div className="space-y-2">
             <h3 className="font-semibold">Manual Sync</h3>
-            <p className="text-sm text-neutral-400">
-              Force sync local data with the network. Use this if you have connection issues.
-            </p>
-            <Button onClick={handleManualSync} disabled={isSyncing} className="w-full bg-green-500 text-white hover:bg-green-600">
+            <p className="text-sm text-neutral-400">Force sync local data with the network.</p>
+            <Button onClick={handleManualSync} disabled={isSyncing} className="w-full bg-green-600 text-white hover:bg-green-700">
               {isSyncing ? 'Syncing...' : 'Start Manual Sync'}
             </Button>
             {isSyncing && <Progress value={syncProgress} className="mt-2 [&>*]:bg-green-400" />}
           </div>
           <div className="space-y-2">
-            <h3 className="font-semibold text-destructive">Danger Zone</h3>
+            <h3 className="font-semibold text-red-400">Danger Zone</h3>
             <Button variant="destructive" className="w-full" onClick={clearDatabase}>
               <Trash2 className="mr-2 h-4 w-4" /> Clear Local Database
             </Button>
@@ -466,7 +745,7 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
           </Button>
         </div>
         <footer className="absolute bottom-4 left-4 right-4 text-center text-xs text-neutral-500">
-            Built with ❤��� at Cloudflare
+            Built with ❤️ at Cloudflare
         </footer>
       </SheetContent>
     </Sheet>
