@@ -80,7 +80,8 @@ function runSetupCommands() {
     const commands = [
     "bun add dexie@^3.2.4",
     "bun add @use-gesture/react@^10.3.0",
-    "bun install dexie@^3.2.7 @use-gesture/react@^10.3.1"
+    "bun install dexie@^3.2.7 @use-gesture/react@^10.3.1",
+    "bun install dexie-react-hooks"
 ];
     
     if (commands.length === 0) {
