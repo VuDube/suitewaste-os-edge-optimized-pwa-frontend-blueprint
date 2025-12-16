@@ -82,7 +82,8 @@ function runSetupCommands() {
     "bun add @use-gesture/react@^10.3.0",
     "bun install dexie@^3.2.7 @use-gesture/react@^10.3.1",
     "bun install dexie-react-hooks",
-    "bun remove dexie-react-hooks"
+    "bun remove dexie-react-hooks",
+    "bun install react-flow"
 ];
     
     if (commands.length === 0) {
