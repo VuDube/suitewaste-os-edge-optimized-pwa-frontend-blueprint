@@ -85,7 +85,8 @@ function runSetupCommands() {
     "bun remove dexie-react-hooks",
     "bun install react-flow",
     "bun remove react-flow",
-    "bun add @xyflow/react"
+    "bun add @xyflow/react",
+    "bun add @xyflow/react@^12.10.0"
 ];
     
     if (commands.length === 0) {
