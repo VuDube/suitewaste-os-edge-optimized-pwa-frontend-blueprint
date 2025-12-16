@@ -22,8 +22,9 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { cn } from '@/lib/utils';
 import { BarChart as RechartsBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { ReactFlow, Background, Controls, MiniMap, Node, Edge } from 'react-flow';
-import 'react-flow/dist/style.css';
+import { ReactFlow, Background, Controls, MiniMap } from '@xyflow/react';
+import type { Node, Edge } from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import useEmblaCarousel from 'embla-carousel-react';
 // --- Constants and Types ---
 const BIO_GREEN = '#2E7D32';
