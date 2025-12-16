@@ -3,11 +3,21 @@ export interface ApiResponse<T = unknown> {
   data?: T;
   error?: string;
 }
-// Minimal real-world chat example types (shared by frontend and worker)
+// SuiteWaste OS Specific Types
 export interface User {
   id: string;
   name: string;
+  email: string;
+  role: string;
+  permissions: string[];
+  passwordHash?: string; // Optional as it should not be sent to the client
 }
+export interface Session {
+  id: string;
+  userId: string;
+  createdAt: number;
+}
+// Minimal real-world chat example types (shared by frontend and worker)
 export interface Chat {
   id: string;
   title: string;
@@ -19,7 +29,6 @@ export interface ChatMessage {
   text: string;
   ts: number; // epoch millis
 }
-// SuiteWaste OS Specific Types
 export interface Task {
   id: string;
   title: string;
@@ -28,7 +37,7 @@ export interface Task {
   dueDate: number;
 }
 export interface Payment {
-  id: string;
+  id:string;
   amount: number;
   status: 'paid' | 'due';
   client: string;

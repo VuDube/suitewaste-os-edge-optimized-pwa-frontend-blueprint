@@ -17,7 +17,6 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
-import { Progress } from '@/components/ui/progress';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { cn } from '@/lib/utils';
@@ -41,7 +40,7 @@ class SuiteWasteDB extends Dexie {
   outbox!: Table<OutboxItem, string>;
   constructor() {
     super('SuiteWasteDB');
-    this.version(4).stores({
+    this.version(5).stores({
       users: 'id, &email, role',
       sessions: 'id, userId, createdAt',
       tasks: 'id, status, assignedTo, dueDate',
@@ -56,17 +55,17 @@ class SuiteWasteDB extends Dexie {
     const userCount = await this.users.count();
     if (userCount > 0) return;
     console.log("Database is empty, seeding demo data...");
-    const demoUsers: Omit<User, 'id' | 'passwordHash' | 'name'>[] = [
-      { email: 'field@suitewaste.os', role: 'Field Operator', permissions: ['operations', 'training'] },
-      { email: 'manager@suitewaste.os', role: 'Operations Manager', permissions: ['operations', 'payments', 'compliance', 'training', 'ai'] },
-      { email: 'auditor@suitewaste.os', role: 'Compliance/Audit Officer', permissions: ['compliance', 'training'] },
-      { email: 'executive@suitewaste.os', role: 'Executive', permissions: ['payments', 'compliance', 'ai'] },
-      { email: 'trainer@suitewaste.os', role: 'Training Officer', permissions: ['training', 'ai'] },
+    const demoUsers: Omit<User, 'id' | 'passwordHash'>[] = [
+      { email: 'field@suitewaste.os', name: 'Field Operator', role: 'Field Operator', permissions: ['operations', 'training'] },
+      { email: 'manager@suitewaste.os', name: 'Operations Manager', role: 'Operations Manager', permissions: ['operations', 'payments', 'compliance', 'training', 'ai'] },
+      { email: 'auditor@suitewaste.os', name: 'Compliance Officer', role: 'Compliance/Audit Officer', permissions: ['compliance', 'training'] },
+      { email: 'executive@suitewaste.os', name: 'Executive', role: 'Executive', permissions: ['payments', 'compliance', 'ai'] },
+      { email: 'trainer@suitewaste.os', name: 'Training Officer', role: 'Training Officer', permissions: ['training', 'ai'] },
     ];
     const passwordHash = await hashText('Auditor123');
     await this.transaction('rw', this.users, async () => {
       for (const u of demoUsers) {
-        await this.users.put({ id: uuidv4(), passwordHash, name: u.role, ...u });
+        await this.users.put({ id: uuidv4(), passwordHash, ...u });
       }
     });
     const manager = await this.users.where({ role: 'Operations Manager' }).first();
@@ -97,7 +96,7 @@ class SuiteWasteDB extends Dexie {
   }
   async signIn(email: string, password: string): Promise<User | null> {
     const user = await this.users.where({ email }).first();
-    if (!user) return null;
+    if (!user || !user.passwordHash) return null;
     const inputHash = await hashText(password);
     if (inputHash === user.passwordHash) {
       await this.sessions.clear();
@@ -115,14 +114,14 @@ class SuiteWasteDB extends Dexie {
 }
 const db = new SuiteWasteDB();
 // --- Sync Service ---
+const endpointMap: Record<string, string> = {
+    tasks: 'tasks',
+    payments: 'payments',
+    complianceLogs: 'compliancelogs',
+    trainingModules: 'trainingmodules',
+    aiMessages: 'aimessages',
+};
 async function syncWithBackend(table: string, action: 'create' | 'update' | 'delete', payload: any) {
-    const endpointMap: Record<string, string> = {
-        tasks: 'tasks',
-        payments: 'payments',
-        complianceLogs: 'compliancelogs',
-        trainingModules: 'trainingmodules',
-        aiMessages: 'aimessages',
-    };
     const endpoint = endpointMap[table];
     if (!endpoint) return;
     const url = action === 'create' ? `/api/${endpoint}` : `/api/${endpoint}/${payload.id}`;
@@ -147,7 +146,7 @@ async function syncWithBackend(table: string, action: 'create' | 'update' | 'del
 }
 // --- Service Worker ---
 const swCode = `
-  const CACHE_NAME = 'suitewaste-os-cache-v3';
+  const CACHE_NAME = 'suitewaste-os-cache-v4';
   const APP_SHELL_URLS = ['/', '/index.html'];
   self.addEventListener('install', event => { event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL_URLS))); });
   self.addEventListener('fetch', event => {
@@ -165,24 +164,26 @@ const swCode = `
   });
 `;
 // --- Custom Hooks ---
-function usePollingQuery<T>(
-  queryFn: () => Promise<T[]>,
-  intervalMs = 1000
-) {
+function usePollingQuery<T>(queryFn: () => Promise<T[]>, intervalMs = 1000) {
   const [data, setData] = useState<T[]>([]);
-  const fetchData = useCallback(async () => {
-    try {
-      const result = await queryFn();
-      setData(result);
-    } catch (error) {
-      console.error("Polling query failed:", error);
-    }
-  }, [queryFn]);
+  const stableQueryFn = useCallback(queryFn, []);
   useEffect(() => {
+    let isMounted = true;
+    const fetchData = async () => {
+      try {
+        const result = await stableQueryFn();
+        if (isMounted) setData(result);
+      } catch (error) {
+        console.error("Polling query failed:", error);
+      }
+    };
     fetchData();
     const intervalId = setInterval(fetchData, intervalMs);
-    return () => clearInterval(intervalId);
-  }, [fetchData, intervalMs]);
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+    };
+  }, [stableQueryFn, intervalMs]);
   return data;
 }
 // --- Error Boundary ---
@@ -376,13 +377,12 @@ const SuiteWasteOS = ({ user, onLogout }: { user: User; onLogout: () => void; })
   const openSwitcher = () => setSwitcherOpen(true);
   const closeSwitcher = () => setSwitcherOpen(false);
   const bindSuiteGesture = useGesture({
-    onDrag: ({ active, movement: [mx], velocity: [vx], event }) => {
-      const isTwoFinger = (event as TouchEvent).touches?.length >= 2;
-      if (isTwoFinger && active && Math.abs(mx) > 50 && Math.abs(vx) > 0.5) {
+    onDrag: ({ pointerIds, movement: [mx], velocity: [vx] }) => {
+      if (pointerIds.size >= 2 && Math.abs(mx) > 50 && Math.abs(vx) > 0.5) {
         if (!isSwitcherOpen) openSwitcher();
       }
     },
-  }, { filterTaps: true, pointer: { touch: true } });
+  }, { filterTaps: true, pointer: { touches: true, locks: true } });
   const availableSuites = useMemo(() =>
     SUITES.filter(suite => suite.permissions.some(p => user.permissions.includes(p))),
     [user.permissions]
@@ -518,8 +518,9 @@ const OperationsDashboard = () => {
         const task = await db.tasks.get(taskId);
         if (task) {
             const newStatus = task.status === 'pending' ? 'completed' : 'pending';
+            const updatedTask = { ...task, status: newStatus };
             await db.tasks.update(taskId, { status: newStatus });
-            await syncWithBackend('tasks', 'update', { id: taskId, status: newStatus });
+            await syncWithBackend('tasks', 'update', updatedTask);
         }
     };
     return (
@@ -576,8 +577,9 @@ const ComplianceDashboard = () => {
     const logs = usePollingQuery(() => db.complianceLogs.orderBy('timestamp').reverse().toArray());
     const toggleCompliance = async (log: ComplianceLog) => {
         const newCompliant = !log.compliant;
+        const updatedLog = { ...log, compliant: newCompliant };
         await db.complianceLogs.update(log.id, { compliant: newCompliant });
-        await syncWithBackend('complianceLogs', 'update', { id: log.id, compliant: newCompliant });
+        await syncWithBackend('complianceLogs', 'update', updatedLog);
     };
     return (
         <ul className="space-y-2">
@@ -600,8 +602,9 @@ const TrainingDashboard = () => {
     const [emblaRef] = useEmblaCarousel();
     const toggleModule = async (mod: TrainingModule) => {
         const newCompleted = !mod.completed;
+        const updatedModule = { ...mod, completed: newCompleted };
         await db.trainingModules.update(mod.id, { completed: newCompleted });
-        await syncWithBackend('trainingModules', 'update', { id: mod.id, completed: newCompleted });
+        await syncWithBackend('trainingModules', 'update', updatedModule);
     };
     return (
         <div className="embla" ref={emblaRef}>
@@ -675,7 +678,7 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
         return;
     }
     setIsSyncing(true);
-    toast.loading("Syncing data with the server...");
+    const syncToast = toast.loading("Syncing data with the server...");
     try {
         const response = await fetch('/api/sync', {
             method: 'POST',
@@ -684,12 +687,14 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
         });
         if (!response.ok) throw new Error('Sync failed on the server.');
         const result = await response.json();
-        await db.outbox.clear();
-        toast.dismiss();
-        toast.success(`${result.data.synced} items synced successfully!`);
+        if (result.success) {
+            await db.outbox.clear();
+            toast.success(`${result.data.synced} items synced successfully!`, { id: syncToast });
+        } else {
+            throw new Error(result.error || 'Unknown sync error');
+        }
     } catch (error) {
-        toast.dismiss();
-        toast.error("Sync failed. Please try again later.");
+        toast.error("Sync failed. Please try again later.", { id: syncToast });
         console.error("Manual sync error:", error);
     } finally {
         setIsSyncing(false);

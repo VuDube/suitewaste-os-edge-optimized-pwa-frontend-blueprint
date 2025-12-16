@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Env } from './core-utils';
 import { UserEntity, ChatBoardEntity, TaskEntity, PaymentEntity, ComplianceLogEntity, TrainingModuleEntity, AiMessageEntity } from "./entities";
 import { ok, bad, notFound, isStr } from './core-utils';
-import type { Task, Payment, ComplianceLog, TrainingModule, AiMessage, OutboxItem } from "@shared/types";
+import type { OutboxItem } from "@shared/types";
 // Helper to dynamically get entity class
 function getEntityClass(tableName: string) {
   switch (tableName) {
@@ -25,9 +25,9 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
     return ok(c, page);
   });
   app.post('/api/users', async (c) => {
-    const { name } = (await c.req.json()) as { name?: string };
-    if (!name?.trim()) return bad(c, 'name required');
-    return ok(c, await UserEntity.create(c.env, { id: crypto.randomUUID(), name: name.trim() }));
+    const { name, email, role, permissions } = (await c.req.json()) as { name?: string, email?: string, role?: string, permissions?: string[] };
+    if (!name?.trim() || !email?.trim() || !role?.trim()) return bad(c, 'name, email, and role required');
+    return ok(c, await UserEntity.create(c.env, { id: crypto.randomUUID(), name: name.trim(), email: email.trim(), role, permissions: permissions || [] }));
   });
   // CHATS
   app.get('/api/chats', async (c) => {
@@ -66,20 +66,17 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
     { path: 'aimessages', ctor: AiMessageEntity },
   ];
   for (const { path, ctor } of entities) {
-    // GET /api/{path}
     app.get(`/api/${path}`, async (c) => {
       await ctor.ensureSeed(c.env);
       const page = await ctor.list(c.env, c.req.query('cursor') ?? null, c.req.query('limit') ? Number(c.req.query('limit')) : undefined);
-      return ok(c, page.items); // Return items directly for simplicity
+      return ok(c, page);
     });
-    // POST /api/{path}
     app.post(`/api/${path}`, async (c) => {
       const body = await c.req.json();
       if (!body.id) body.id = crypto.randomUUID();
       const item = await ctor.create(c.env, body);
       return ok(c, item);
     });
-    // PATCH /api/{path}/:id
     app.patch(`/api/${path}/:id`, async (c) => {
       const id = c.req.param('id');
       const body = await c.req.json();
@@ -88,7 +85,6 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
       await entity.patch(body);
       return ok(c, await entity.getState());
     });
-    // DELETE /api/{path}/:id
     app.delete(`/api/${path}/:id`, async (c) => {
       const id = c.req.param('id');
       const deleted = await ctor.delete(c.env, id);
@@ -106,20 +102,24 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
         console.warn(`[SYNC] Unknown table: ${item.table}`);
         continue;
       }
+      if (!item.payload?.id) {
+        console.warn(`[SYNC] Skipping item without id: ${JSON.stringify(item)}`);
+        continue;
+      }
       try {
         switch (item.action) {
           case 'create':
             await EntityClass.create(c.env, item.payload);
             break;
-          case 'update':
+          case 'update': {
             const entityToUpdate = new EntityClass(c.env, item.payload.id);
             if (await entityToUpdate.exists()) {
               await entityToUpdate.patch(item.payload);
             } else {
-              // If it doesn't exist, maybe it was deleted. Or create it.
               await EntityClass.create(c.env, item.payload);
             }
             break;
+          }
           case 'delete':
             await EntityClass.delete(c.env, item.payload.id);
             break;
