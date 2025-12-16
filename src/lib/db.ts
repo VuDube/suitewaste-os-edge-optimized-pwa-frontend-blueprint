@@ -66,32 +66,29 @@ class SuiteWasteDB extends Dexie {
     });
   }
   async seedIfEmpty() {
-    const userCount = await this.users.count();
-    if (userCount < DEMO_USERS_CONFIG.length) {
-      console.log('Database is missing some demo users, seeding atomically...');
-      try {
-        await this.transaction('rw', this.users, async () => {
-          const passwordHash = await hashText('Auditor123');
-          for (const u of DEMO_USERS_CONFIG) {
-            const existingUser = await this.users.where('email').equalsIgnoreCase(u.email).first();
-            if (!existingUser) {
-              const userToCreate: User = {
-                id: uuidv4(),
-                email: u.email,
-                passwordHash,
-                role: u.role as User['role'],
-                permissions: u.permissions,
-              };
-              await this.users.add(userToCreate);
-              console.log(`Seeded user: ${u.email}`);
-            } else {
-              console.log(`User ${u.email} already exists, skipping.`);
-            }
-          }
-        });
-      } catch (error) {
-        console.error("Seeding transaction failed:", error);
-        // This will prevent the app from crashing on constraint errors during seeding.
+    // Seed demo users in an idempotent, non‑transactional way.
+    // Compute the password hash once to avoid repeated work.
+    const passwordHash = await hashText('Auditor123');
+    console.log('Seeding demo users if missing...');
+    for (const u of DEMO_USERS_CONFIG) {
+      const existingUser = await this.users.where('email').equalsIgnoreCase(u.email).first();
+      if (!existingUser) {
+        const userToCreate: User = {
+          id: uuidv4(),
+          email: u.email,
+          passwordHash,
+          role: u.role as User['role'],
+          permissions: u.permissions,
+        };
+        try {
+          await this.users.add(userToCreate);
+          console.log(`Seeded user: ${u.email}`);
+        } catch (error) {
+          // Ignore duplicate‑key errors that could arise from race conditions.
+          console.warn(`Failed to add user ${u.email}:`, error);
+        }
+      } else {
+        console.log(`User ${u.email} already exists, skipping.`);
       }
     }
   }
