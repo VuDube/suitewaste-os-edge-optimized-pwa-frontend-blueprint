@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, forwardRef, PropsWithChildren } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -22,10 +22,13 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { cn } from '@/lib/utils';
 import { BarChart as RechartsBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { ReactFlow, Background, Controls, MiniMap, Node, Edge } from 'react-flow';
+import 'react-flow/dist/style.css';
+import useEmblaCarousel from 'embla-carousel-react';
 // --- Constants and Types ---
 const BIO_GREEN = '#2E7D32';
 const OLED_BLACK = '#0f0f0f';
-// --- Database Definition (Inlined from db.ts) ---
+// --- Database Definition ---
 export interface User {
   id: string;
   email: string;
@@ -76,10 +79,7 @@ class SuiteWasteDB extends Dexie {
     const passwordHash = await hashText('Auditor123');
     await this.transaction('rw', this.users, async () => {
       for (const u of demoUsers) {
-        const existing = await this.users.where({ email: u.email }).first();
-        if (!existing) {
-          await this.users.put({ id: uuidv4(), passwordHash, ...u } as User);
-        }
+        await this.users.put({ id: uuidv4(), passwordHash, ...u });
       }
     });
     const manager = await this.users.where({ role: 'Operations Manager' }).first();
@@ -127,14 +127,26 @@ class SuiteWasteDB extends Dexie {
   }
 }
 const db = new SuiteWasteDB();
-// --- Service Worker (Inlined as Blob) ---
+// --- Service Worker ---
 const swCode = `
-  const CACHE_NAME = 'suitewaste-os-cache-v1';
+  const CACHE_NAME = 'suitewaste-os-cache-v2';
   const APP_SHELL_URLS = ['/', '/index.html'];
   self.addEventListener('install', event => { event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL_URLS))); });
   self.addEventListener('fetch', event => {
     if (event.request.url.includes('/api/')) {
-      event.respondWith(fetch(event.request).catch(() => new Response(JSON.stringify({ success: false, error: 'Offline' }), { headers: { 'Content-Type': 'application/json' } })));
+      event.respondWith(
+        fetch(event.request)
+          .then(networkResponse => {
+            if (networkResponse.ok) {
+              const responseToCache = networkResponse.clone();
+              caches.open(CACHE_NAME).then(cache => cache.put(event.request, responseToCache));
+            }
+            return networkResponse;
+          })
+          .catch(() => caches.match(event.request).then(cachedResponse => {
+            return cachedResponse || new Response(JSON.stringify({ success: false, error: 'Offline' }), { headers: { 'Content-Type': 'application/json' } });
+          }))
+      );
     } else {
       event.respondWith(caches.match(event.request).then(response => response || fetch(event.request)));
     }
@@ -153,28 +165,49 @@ const swCode = `
     }
   });
 `;
-// --- Custom Realtime Hook ---
-function useRealtimeQuery<T>(query: () => Promise<T[] | undefined>) {
-  const [data, setData] = useState<T[] | undefined>(undefined);
+// --- Custom Hooks ---
+function useRealtimeQuery<T, TKey extends string | number | Date>(
+  table: Dexie.Table<T, TKey>,
+  query: (table: Dexie.Table<T, TKey>) => Promise<T[]>
+) {
+  const [data, setData] = useState<T[]>([]);
   const fetch_data = useCallback(async () => {
     try {
-      const result = await query();
+      const result = await query(table);
       setData(result);
     } catch (error) {
       console.error("Realtime query failed:", error);
       toast.error("Failed to load data.");
     }
-  }, [query]);
+  }, [query, table]);
   useEffect(() => {
     fetch_data();
-    const subscription = () => { fetch_data(); };
-    db.on('changes', subscription);
-    return () => db.on('changes').unsubscribe(subscription);
-  }, [fetch_data]);
+    const subscription = table.hook('creating', fetch_data);
+    const subscription2 = table.hook('updating', fetch_data);
+    const subscription3 = table.hook('deleting', fetch_data);
+    return () => {
+      subscription.unsubscribe();
+      subscription2.unsubscribe();
+      subscription3.unsubscribe();
+    };
+  }, [fetch_data, table]);
   return data;
 }
+// --- Error Boundary ---
+class DashboardErrorBoundary extends React.Component<PropsWithChildren<{ fallback: React.ReactNode }>, { hasError: boolean }> {
+  constructor(props: PropsWithChildren<{ fallback: React.ReactNode }>) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError(_error: Error) { return { hasError: true }; }
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) { console.error("Dashboard Error:", error, errorInfo); }
+  render() {
+    if (this.state.hasError) { return this.props.fallback; }
+    return this.props.children;
+  }
+}
 // --- Inlined Components ---
-const SuiteIcon = React.forwardRef<HTMLButtonElement, { icon: React.ElementType; label: string; className?: string; iconClassName?: string; onClick?: () => void }>(
+const SuiteIcon = forwardRef<HTMLButtonElement, { icon: React.ElementType; label: string; className?: string; iconClassName?: string; onClick?: () => void }>(
   ({ icon: Icon, label, className, iconClassName, onClick }, ref) => (
     <motion.button
       ref={ref}
@@ -188,7 +221,7 @@ const SuiteIcon = React.forwardRef<HTMLButtonElement, { icon: React.ElementType;
       whileTap="tap"
     >
       <Icon className={cn("w-8 h-8 text-white", iconClassName)} />
-      <span className="text-xs font-medium text-white/90 tracking-tight">{label}</span>
+      <span className="text-xs font-medium text-white/90 tracking-tight text-[clamp(0.75rem,2vw,0.875rem)]">{label}</span>
     </motion.button>
   )
 );
@@ -253,7 +286,7 @@ const LoadingScreen = () => (
   <div style={{ backgroundColor: OLED_BLACK }} className="w-full h-screen flex flex-col items-center justify-center gap-4">
     <img src="https://i.imgur.com/Jt5g2S6.png" alt="SuiteWaste Logo" className="w-24 h-24 animate-pulse" />
     <Loader className="text-white/80 animate-spin" />
-    <p className="text-white/60">Initializing SuiteWaste OS...</p>
+    <p className="text-white/60 text-[clamp(1rem,4vw,1.125rem)]">Initializing SuiteWaste OS...</p>
   </div>
 );
 const loginSchema = z.object({
@@ -292,9 +325,9 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (user: User) => void 
         <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="text-center mb-8">
           <img src="https://i.imgur.com/Jt5g2S6.png" alt="SuiteWaste Logo" className="w-32 h-32 mx-auto mb-4" style={{ filter: 'drop-shadow(0 0 15px rgba(46, 125, 50, 0.8))' }} />
           <h1 className="text-4xl font-bold text-white">SuiteWaste OS</h1>
-          <p className="text-lg text-gray-300">Edge-Optimized Waste Management</p>
+          <p className="text-lg text-gray-300 text-[clamp(1rem,4vw,1.125rem)]">Edge-Optimized Waste Management</p>
         </motion.div>
-        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5, delay: 0.2 }} className="bg-black/10 backdrop-blur-2xl border border-white/10 rounded-3xl p-8 shadow-[0_8px_32px_rgba(0,0,0,0.37)]">
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5, delay: 0.2 }} className="bg-black/20 backdrop-blur-[20px] border border-white/20 rounded-3xl p-8 shadow-[0_25px_50px_rgba(0,0,0,0.5)]">
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
               <FormField control={form.control} name="email" render={({ field }) => (
@@ -303,7 +336,7 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (user: User) => void 
                   <FormControl>
                     <div className="relative flex items-center">
                       <Mail className="absolute left-3 w-5 h-5 text-green-300" />
-                      <Input type="email" placeholder="manager@suitewaste.os" className="bg-black/20 border border-white/10 text-white placeholder:text-gray-400 rounded-xl pl-10 pr-4 py-3 h-12" {...field} />
+                      <Input type="email" placeholder="manager@suitewaste.os" className="bg-black/20 border border-white/10 text-white placeholder:text-gray-400 rounded-xl pl-10 pr-4 py-3 h-12 text-[clamp(1rem,4vw,1.125rem)]" {...field} />
                     </div>
                   </FormControl><FormMessage />
                 </FormItem>
@@ -314,7 +347,7 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (user: User) => void 
                   <FormControl>
                     <div className="relative flex items-center">
                       <Lock className="absolute left-3 w-5 h-5 text-green-300" />
-                      <Input type="password" placeholder="••••••••" className="bg-black/20 border border-white/10 text-white placeholder:text-gray-400 rounded-xl pl-10 pr-4 py-3 h-12" {...field} />
+                      <Input type="password" placeholder="••••••••" className="bg-black/20 border border-white/10 text-white placeholder:text-gray-400 rounded-xl pl-10 pr-4 py-3 h-12 text-[clamp(1rem,4vw,1.125rem)]" {...field} />
                     </div>
                   </FormControl><FormMessage />
                 </FormItem>
@@ -322,11 +355,11 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (user: User) => void 
               <div className="flex items-center justify-between text-sm">
                 <div className="flex items-center space-x-2">
                   <Checkbox id="remember-me" className="border-white/50 data-[state=checked]:bg-green-500 data-[state=checked]:text-white" />
-                  <label htmlFor="remember-me" className="text-gray-200">Remember me</label>
+                  <label htmlFor="remember-me" className="text-gray-200 text-[clamp(0.875rem,3vw,1rem)]">Remember me</label>
                 </div>
-                <a href="#" className="text-green-300 hover:text-white transition">Reset password?</a>
+                <a href="#" className="text-green-300 hover:text-white transition text-[clamp(0.875rem,3vw,1rem)]">Reset password?</a>
               </div>
-              <Button type="submit" className="w-full bg-white text-green-900 font-bold py-4 h-14 text-base rounded-xl transition-all duration-300 hover:scale-105 active:scale-100 flex items-center justify-center" disabled={isSubmitting}>
+              <Button type="submit" className="w-full bg-white text-green-900 font-bold py-4 h-14 text-base rounded-xl transition-all duration-300 hover:scale-105 active:scale-100 flex items-center justify-center text-[clamp(1rem,4vw,1.125rem)]" disabled={isSubmitting}>
                 {isSubmitting ? <Loader className="animate-spin" /> : <><ArrowRight className="mr-2 h-5 w-5" /> Secure Sign In</>}
               </Button>
             </form>
@@ -352,12 +385,12 @@ const SuiteWasteOS = ({ user, onLogout }: { user: User; onLogout: () => void; })
   const closeSwitcher = () => setSwitcherOpen(false);
   const bindSuiteGesture = useGesture({
     onDrag: ({ event, touches, down, movement: [mx], velocity: [vx] }) => {
-      const isTwoFingerDrag = (event as TouchEvent).touches?.length === 2 || touches === 2;
-      if (isTwoFingerDrag && Math.abs(mx) > 50 && Math.abs(vx) > 0.5) {
+      const isTwoFingerDrag = (event as TouchEvent).touches?.length >= 2 || touches >= 2;
+      if (isTwoFingerDrag && Math.abs(mx) > 50 && Math.abs(vx) > 0.5 && down) {
         if (!isSwitcherOpen) openSwitcher();
       }
     },
-  });
+  }, { filterTaps: true });
   const availableSuites = useMemo(() =>
     SUITES.filter(suite => suite.permissions.some(p => user.permissions.includes(p))),
     [user.permissions]
@@ -367,7 +400,7 @@ const SuiteWasteOS = ({ user, onLogout }: { user: User; onLogout: () => void; })
     closeSwitcher();
   };
   return (
-    <div className="h-[calc(100vh-4rem)] md:h-[calc(100vh-5rem)] lg:h-[calc(100vh-6rem)] max-w-lg mx-auto flex flex-col bg-black/80 rounded-3xl shadow-2xl overflow-hidden border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.37)]" {...bindSuiteGesture()}>
+    <div className="h-[calc(100vh-4rem)] md:h-[calc(100vh-5rem)] lg:h-[calc(100vh-6rem)] max-w-lg mx-auto flex flex-col bg-black/80 rounded-3xl shadow-[0_25px_50px_rgba(0,0,0,0.5)] overflow-hidden border border-white/20" {...bindSuiteGesture()}>
       <StatusBar />
       <div className="flex-grow overflow-y-auto p-1 sm:p-2 lg:p-4">
         <AnimatePresence mode="wait">
@@ -406,7 +439,7 @@ const StatusBar = () => {
 };
 const Homescreen = ({ user, availableSuites, onSuiteSelect }: { user: User; availableSuites: typeof SUITES; onSuiteSelect: (key: SuiteKey) => void; }) => (
   <div className="py-8">
-    <h2 className="text-3xl font-bold text-center mb-10 text-white">Welcome, {user.role}</h2>
+    <h2 className="text-3xl font-bold text-center mb-10 text-white text-[clamp(1.5rem,5vw,2rem)]">Welcome, {user.role}</h2>
     <div className="grid grid-cols-3 sm:grid-cols-4 gap-y-8 gap-x-4 justify-items-center">
       {availableSuites.map(suite => (
         <SuiteIcon key={suite.key} icon={suite.icon} label={suite.label} onClick={() => onSuiteSelect(suite.key)} className="bg-white/5 hover:bg-white/10 border-white/10" />
@@ -416,7 +449,7 @@ const Homescreen = ({ user, availableSuites, onSuiteSelect }: { user: User; avai
 );
 const Dock = ({ onSwitcherOpen, onLogout }: { onSwitcherOpen: () => void; onLogout: () => void; }) => (
   <div className="w-full p-2">
-    <div className="bg-black/20 border border-white/10 backdrop-blur-lg rounded-full flex justify-around items-center h-16">
+    <div className="bg-black/20 border border-white/20 backdrop-blur-[20px] rounded-full flex justify-around items-center h-16">
       <Button variant="ghost" size="icon" className="rounded-full text-white/70 hover:text-white" onClick={onSwitcherOpen}><Menu /></Button>
       <SettingsSheet onLogout={onLogout} />
     </div>
@@ -460,61 +493,52 @@ const DashboardView = ({ suiteKey, onBack }: { suiteKey: SuiteKey; onBack: () =>
       case 'compliance': return <ComplianceDashboard />;
       case 'training': return <TrainingDashboard />;
       case 'ai': return <AiDashboard />;
-      default: return <p>Dashboard coming soon.</p>;
+      default: return <p className="text-[clamp(1rem,4vw,1.125rem)]">Dashboard coming soon.</p>;
     }
   };
   return (
-    <Card className="bg-black/20 border border-white/10 backdrop-blur-xl text-white rounded-3xl p-4 shadow-glass h-full flex flex-col">
+    <Card className="bg-black/20 border border-white/20 backdrop-blur-[20px] text-white rounded-3xl p-4 shadow-[0_25px_50px_rgba(0,0,0,0.5)] h-full flex flex-col">
       <CardHeader className="flex flex-row items-center justify-between p-0 mb-4">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="icon" onClick={onBack} className="text-white/80 hover:text-white hover:bg-white/10 rounded-full"><ArrowLeft /></Button>
           <Icon className="w-8 h-8" style={{ color: BIO_GREEN }} />
-          <CardTitle className="text-2xl font-bold">{suite.label}</CardTitle>
+          <CardTitle className="text-2xl font-bold text-[clamp(1.25rem,5vw,1.5rem)]">{suite.label}</CardTitle>
         </div>
       </CardHeader>
       <CardContent className="text-neutral-300 p-0 flex-grow overflow-y-auto">
-        {renderContent()}
+        <DashboardErrorBoundary fallback={<Card className="p-4 bg-red-900/50 border-red-500/50"><p>Error in {suite.label}.</p><Button onClick={onBack}>Back</Button></Card>}>
+          {renderContent()}
+        </DashboardErrorBoundary>
       </CardContent>
     </Card>
   );
 };
 const OperationsDashboard = () => {
-    const tasks = useRealtimeQuery<Task>(() => db.tasks.orderBy('dueDate').toArray());
-    const [newTaskTitle, setNewTaskTitle] = useState('');
-    const handleAddTask = async () => {
-        if (!newTaskTitle.trim()) return;
-        const manager = await db.users.where({ role: 'Operations Manager' }).first();
-        if (!manager) { toast.error("Manager not found to assign task."); return; }
-        const payload = { id: uuidv4(), title: newTaskTitle, status: 'pending', assignedTo: manager.id, dueDate: Date.now() + 24 * 60 * 60 * 1000 };
-        await db.tasks.add(payload);
-        await db.outbox.add({ id: uuidv4(), type: 'task_create', payload, timestamp: Date.now() });
-        setNewTaskTitle('');
-        toast.success("Task added!");
-    };
-    const toggleTaskStatus = (task: Task) => {
-        db.tasks.update(task.id, { status: task.status === 'pending' ? 'completed' : 'pending' });
+    const tasks = useRealtimeQuery(db.tasks, table => table.orderBy('dueDate').toArray());
+    const nodes = useMemo<Node[]>(() => tasks.map((task, i) => ({
+        id: task.id,
+        position: { x: (i % 3) * 200, y: Math.floor(i / 3) * 120 },
+        data: { label: `${task.title} (${task.status})` },
+        style: { background: task.status === 'completed' ? '#2E7D32' : '#4a4a4a', color: 'white', border: 'none', borderRadius: '8px' }
+    })), [tasks]);
+    const edges = useMemo<Edge[]>(() => tasks.slice(1).map((_, i) => ({ id: `e${i}-${i+1}`, source: tasks[i].id, target: tasks[i+1].id, animated: true })), [tasks]);
+    const toggleTaskStatus = (taskId: string) => {
+        db.tasks.get(taskId).then(task => {
+            if (task) db.tasks.update(taskId, { status: task.status === 'pending' ? 'completed' : 'pending' });
+        });
     };
     return (
-        <div className="space-y-4">
-            <div className="flex gap-2">
-                <Input value={newTaskTitle} onChange={e => setNewTaskTitle(e.target.value)} placeholder="New task title..." className="bg-black/20 border-white/10" />
-                <Button onClick={handleAddTask} className="bg-green-600 hover:bg-green-700"><PlusCircle size={18} /></Button>
-            </div>
-            <ul className="space-y-2">
-                {tasks?.map(task => (
-                    <li key={task.id} onDoubleClick={() => toggleTaskStatus(task)} className="flex items-center justify-between p-3 bg-white/5 rounded-lg cursor-pointer transition-colors hover:bg-white/10">
-                        <span className={cn("flex-grow", task.status === 'completed' && 'line-through text-neutral-500')}>{task.title}</span>
-                        <Button size="icon" variant="ghost" onClick={() => toggleTaskStatus(task)}>
-                            {task.status === 'completed' ? <CheckCircle className="text-green-500" /> : <div className="w-5 h-5 rounded-full border-2 border-neutral-400" />}
-                        </Button>
-                    </li>
-                ))}
-            </ul>
+        <div className="h-full w-full rounded-lg overflow-hidden">
+            <ReactFlow nodes={nodes} edges={edges} onNodeDoubleClick={(_, node) => toggleTaskStatus(node.id)} fitView>
+                <Background color="#444" />
+                <Controls />
+                <MiniMap />
+            </ReactFlow>
         </div>
     );
 };
 const PaymentsDashboard = () => {
-    const payments = useRealtimeQuery<Payment>(() => db.payments.orderBy('date').toArray());
+    const payments = useRealtimeQuery(db.payments, table => table.orderBy('date').toArray());
     const chartData = useMemo(() => {
         return payments?.reduce((acc, p) => {
             const month = new Date(p.date).toLocaleString('default', { month: 'short' });
@@ -529,7 +553,7 @@ const PaymentsDashboard = () => {
     }, [payments]);
     return (
         <div className="space-y-4 h-[500px]">
-            <h3 className="text-xl font-semibold">Monthly Revenue</h3>
+            <h3 className="text-xl font-semibold text-[clamp(1.125rem,4vw,1.25rem)]">Monthly Revenue</h3>
             <ResponsiveContainer width="100%" height={250}>
                 <RechartsBarChart data={chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
@@ -541,10 +565,10 @@ const PaymentsDashboard = () => {
                     <Bar dataKey="due" fill="#b71c1c" />
                 </RechartsBarChart>
             </ResponsiveContainer>
-            <h3 className="text-xl font-semibold">Recent Transactions</h3>
+            <h3 className="text-xl font-semibold text-[clamp(1.125rem,4vw,1.25rem)]">Recent Transactions</h3>
             <ul className="space-y-2">
                 {payments?.slice(-5).reverse().map(p => (
-                    <li key={p.id} className="flex justify-between p-2 bg-white/5 rounded-lg">
+                    <li key={p.id} className="flex justify-between p-2 bg-white/5 rounded-lg text-[clamp(1rem,4vw,1.125rem)]">
                         <span>{p.client}</span>
                         <span className={cn(p.status === 'paid' ? 'text-green-400' : 'text-red-400')}>${p.amount.toFixed(2)}</span>
                     </li>
@@ -554,7 +578,7 @@ const PaymentsDashboard = () => {
     );
 };
 const ComplianceDashboard = () => {
-    const logs = useRealtimeQuery<ComplianceLog>(() => db.complianceLogs.orderBy('timestamp').reverse().toArray());
+    const logs = useRealtimeQuery(db.complianceLogs, table => table.orderBy('timestamp').reverse().toArray());
     const toggleCompliance = (log: ComplianceLog) => {
         db.complianceLogs.update(log.id, { compliant: !log.compliant });
     };
@@ -562,7 +586,7 @@ const ComplianceDashboard = () => {
         <ul className="space-y-2">
             {logs?.map(log => (
                 <li key={log.id} onDoubleClick={() => toggleCompliance(log)} className="flex items-center justify-between p-3 bg-white/5 rounded-lg cursor-pointer transition-colors hover:bg-white/10">
-                    <div className="flex-grow">
+                    <div className="flex-grow text-[clamp(1rem,4vw,1.125rem)]">
                         <p>{log.description}</p>
                         <p className="text-xs text-neutral-400">{new Date(log.timestamp).toLocaleDateString()}</p>
                     </div>
@@ -575,30 +599,37 @@ const ComplianceDashboard = () => {
     );
 };
 const TrainingDashboard = () => {
-    const modules = useRealtimeQuery<TrainingModule>(() => db.trainingModules.toArray());
+    const modules = useRealtimeQuery(db.trainingModules, table => table.toArray());
+    const [emblaRef] = useEmblaCarousel();
     const toggleModule = (mod: TrainingModule) => {
         db.trainingModules.update(mod.id, { completed: !mod.completed });
     };
     return (
-        <Accordion type="single" collapsible className="w-full">
-            {modules?.map(mod => (
-                <AccordionItem value={mod.id} key={mod.id} className="border-white/10">
-                    <AccordionTrigger className="hover:no-underline">
-                        <div className="flex items-center gap-4 w-full">
-                            <Button size="icon" variant="ghost" onClick={(e) => { e.stopPropagation(); toggleModule(mod); }}>
-                                {mod.completed ? <CheckCircle className="text-green-500" /> : <div className="w-5 h-5 rounded-full border-2 border-neutral-400" />}
-                            </Button>
-                            <span className={cn(mod.completed && 'line-through text-neutral-500')}>{mod.title}</span>
-                        </div>
-                    </AccordionTrigger>
-                    <AccordionContent>This is the content for the training module. In a real app, this would contain text, images, or videos.</AccordionContent>
-                </AccordionItem>
-            ))}
-        </Accordion>
+        <div className="embla" ref={emblaRef}>
+            <div className="embla__container">
+                {modules?.map(mod => (
+                    <div className="embla__slide p-2" key={mod.id}>
+                        <Accordion type="single" collapsible className="w-full bg-white/5 p-2 rounded-lg">
+                            <AccordionItem value={mod.id} className="border-white/10">
+                                <AccordionTrigger className="hover:no-underline text-[clamp(1rem,4vw,1.125rem)]">
+                                    <div className="flex items-center gap-4 w-full">
+                                        <Button size="icon" variant="ghost" onClick={(e) => { e.stopPropagation(); toggleModule(mod); }}>
+                                            {mod.completed ? <CheckCircle className="text-green-500" /> : <div className="w-5 h-5 rounded-full border-2 border-neutral-400" />}
+                                        </Button>
+                                        <span className={cn(mod.completed && 'line-through text-neutral-500')}>{mod.title}</span>
+                                    </div>
+                                </AccordionTrigger>
+                                <AccordionContent className="text-[clamp(1rem,4vw,1.125rem)]">This is the content for the training module. In a real app, this would contain text, images, or videos.</AccordionContent>
+                            </AccordionItem>
+                        </Accordion>
+                    </div>
+                ))}
+            </div>
+        </div>
     );
 };
 const AiDashboard = () => {
-    const messages = useRealtimeQuery<AiMessage>(() => db.aiMessages.orderBy('timestamp').toArray());
+    const messages = useRealtimeQuery(db.aiMessages, table => table.orderBy('timestamp').toArray());
     const [input, setInput] = useState('');
     const handleSend = async () => {
         if (!input.trim()) return;
@@ -615,14 +646,14 @@ const AiDashboard = () => {
             <div className="flex-grow space-y-4 overflow-y-auto p-2">
                 {messages?.map(msg => (
                     <div key={msg.id} className={cn("flex", msg.role === 'user' ? 'justify-end' : 'justify-start')}>
-                        <div className={cn("max-w-xs p-3 rounded-2xl", msg.role === 'user' ? 'bg-green-600 rounded-br-none' : 'bg-neutral-700 rounded-bl-none')}>
+                        <div className={cn("max-w-xs p-3 rounded-2xl text-[clamp(1rem,4vw,1.125rem)]", msg.role === 'user' ? 'bg-green-600 rounded-br-none' : 'bg-neutral-700 rounded-bl-none')}>
                             {msg.content}
                         </div>
                     </div>
                 ))}
             </div>
             <div className="flex gap-2 p-2 border-t border-white/10">
-                <Input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSend()} placeholder="Ask AI..." className="bg-black/20 border-white/10" />
+                <Input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSend()} placeholder="Ask AI..." className="bg-black/20 border-white/10 text-[clamp(1rem,4vw,1.125rem)]" />
                 <Button onClick={handleSend} className="bg-green-600 hover:bg-green-700"><Send size={18} /></Button>
             </div>
         </div>
@@ -632,18 +663,8 @@ const AiDashboard = () => {
 const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
   const [syncProgress, setSyncProgress] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
-  useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      if (event.data.type === 'SYNC_PROGRESS') setSyncProgress(event.data.progress);
-      else if (event.data.type === 'SYNC_COMPLETE') {
-        setSyncProgress(100);
-        setTimeout(() => { setIsSyncing(false); toast.success("Manual sync completed."); }, 500);
-      }
-    };
-    if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', handleMessage);
-    return () => { if ('serviceWorker' in navigator) navigator.serviceWorker.removeEventListener('message', handleMessage); };
-  }, []);
-  const handleManualSync = async () => {
+  const handleManualSync = useCallback(async () => {
+    if (isSyncing) return;
     if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) {
       toast.error("Service Worker not available for sync.");
       return;
@@ -657,12 +678,26 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
         return;
     }
     navigator.serviceWorker.controller.postMessage({ type: 'MANUAL_SYNC' });
-    // Simulate API call and clear outbox
     setTimeout(async () => {
         await db.outbox.clear();
         toast.success(`${outboxItems.length} items synced.`);
-    }, 2500); // Corresponds to the 5*500ms interval in SW
-  };
+    }, 2500);
+  }, [isSyncing]);
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data.type === 'SYNC_PROGRESS') setSyncProgress(event.data.progress);
+      else if (event.data.type === 'SYNC_COMPLETE') {
+        setSyncProgress(100);
+        setTimeout(() => { setIsSyncing(false); toast.success("Manual sync completed."); }, 500);
+      }
+    };
+    if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', handleMessage);
+    window.addEventListener('online', handleManualSync);
+    return () => { 
+      if ('serviceWorker' in navigator) navigator.serviceWorker.removeEventListener('message', handleMessage);
+      window.removeEventListener('online', handleManualSync);
+    };
+  }, [handleManualSync]);
   const clearDatabase = async () => {
     try {
       await db.delete();
@@ -678,13 +713,13 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
       <SheetTrigger asChild>
         <Button variant="ghost" size="icon" className="rounded-full text-white/70 hover:text-white"><Settings /></Button>
       </SheetTrigger>
-      <SheetContent className="bg-black/50 border-l-white/10 text-white/90 backdrop-blur-2xl" aria-describedby="settings-description">
+      <SheetContent className="bg-black/50 border-l-white/20 text-white/90 backdrop-blur-[20px]" aria-describedby="settings-description">
         <span id="settings-description" className="sr-only">Settings panel</span>
         <SheetHeader><SheetTitle className="text-white">Settings</SheetTitle></SheetHeader>
         <div className="py-4 space-y-6">
           <div className="space-y-2">
             <h3 className="font-semibold">Manual Sync</h3>
-            <p className="text-sm text-neutral-400">Force sync local data with the network.</p>
+            <p className="text-sm text-neutral-400">Force sync local data with the network. Sync also runs automatically when online.</p>
             <Button onClick={handleManualSync} disabled={isSyncing} className="w-full bg-green-600 text-white hover:bg-green-700">
               {isSyncing ? 'Syncing...' : 'Start Manual Sync'}
             </Button>
@@ -701,7 +736,7 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
           </Button>
         </div>
         <footer className="absolute bottom-4 left-4 right-4 text-center text-xs text-neutral-500">
-            Built with ❤️ at Cloudflare
+            Built with ��️ at Cloudflare
         </footer>
       </SheetContent>
     </Sheet>
