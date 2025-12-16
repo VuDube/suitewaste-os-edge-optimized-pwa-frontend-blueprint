@@ -22,55 +22,41 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { cn } from '@/lib/utils';
 import { BarChart as RechartsBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { ReactFlow, Background, Controls, MiniMap } from '@xyflow/react';
-import type { Node, Edge } from '@xyflow/react';
+import { ReactFlow, Background, Controls, MiniMap, Node, Edge } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import useEmblaCarousel from 'embla-carousel-react';
+import type { User, Session, Task, Payment, ComplianceLog, TrainingModule, AiMessage, OutboxItem } from '@shared/types';
 // --- Constants and Types ---
 const BIO_GREEN = '#2E7D32';
 const OLED_BLACK = '#0f0f0f';
 // --- Database Definition ---
-export interface User {
-  id: string;
-  email: string;
-  passwordHash: string;
-  role: 'Field Operator' | 'Operations Manager' | 'Compliance/Audit Officer' | 'Executive' | 'Training Officer';
-  permissions: string[];
-}
-export interface Session { id: string; userId: string; createdAt: number; }
-export interface Task { id: string; title: string; status: 'pending' | 'completed'; assignedTo: string; dueDate: number; }
-export interface Payment { id: string; amount: number; status: 'paid' | 'due'; client: string; date: number; }
-export interface ComplianceLog { id: string; description: string; compliant: boolean; timestamp: number; }
-export interface TrainingModule { id: string; title: string; content: string; completed: boolean; }
-export interface AiMessage { id: string; role: 'user' | 'ai'; content: string; timestamp: number; }
-export interface OutboxItem { id: string; type: string; payload: any; timestamp: number; }
 class SuiteWasteDB extends Dexie {
-  users!: Table<User>;
-  sessions!: Table<Session>;
-  tasks!: Table<Task>;
-  payments!: Table<Payment>;
-  complianceLogs!: Table<ComplianceLog>;
-  trainingModules!: Table<TrainingModule>;
-  aiMessages!: Table<AiMessage>;
-  outbox!: Table<OutboxItem>;
+  users!: Table<User, string>;
+  sessions!: Table<Session, string>;
+  tasks!: Table<Task, string>;
+  payments!: Table<Payment, string>;
+  complianceLogs!: Table<ComplianceLog, string>;
+  trainingModules!: Table<TrainingModule, string>;
+  aiMessages!: Table<AiMessage, string>;
+  outbox!: Table<OutboxItem, string>;
   constructor() {
     super('SuiteWasteDB');
-    this.version(3).stores({
-      users: '++id, &email, role',
-      sessions: '++id, userId, createdAt',
-      tasks: '++id, status, assignedTo, dueDate',
-      payments: '++id, status, date',
-      complianceLogs: '++id, compliant, timestamp',
-      trainingModules: '++id, completed',
-      aiMessages: '++id, timestamp',
-      outbox: '++id, timestamp',
+    this.version(4).stores({
+      users: 'id, &email, role',
+      sessions: 'id, userId, createdAt',
+      tasks: 'id, status, assignedTo, dueDate',
+      payments: 'id, status, date',
+      complianceLogs: 'id, compliant, timestamp',
+      trainingModules: 'id, completed',
+      aiMessages: 'id, timestamp',
+      outbox: 'id, timestamp',
     });
   }
   async seedIfEmpty() {
     const userCount = await this.users.count();
     if (userCount > 0) return;
     console.log("Database is empty, seeding demo data...");
-    const demoUsers: Omit<User, 'id' | 'passwordHash'>[] = [
+    const demoUsers: Omit<User, 'id' | 'passwordHash' | 'name'>[] = [
       { email: 'field@suitewaste.os', role: 'Field Operator', permissions: ['operations', 'training'] },
       { email: 'manager@suitewaste.os', role: 'Operations Manager', permissions: ['operations', 'payments', 'compliance', 'training', 'ai'] },
       { email: 'auditor@suitewaste.os', role: 'Compliance/Audit Officer', permissions: ['compliance', 'training'] },
@@ -80,7 +66,7 @@ class SuiteWasteDB extends Dexie {
     const passwordHash = await hashText('Auditor123');
     await this.transaction('rw', this.users, async () => {
       for (const u of demoUsers) {
-        await this.users.put({ id: uuidv4(), passwordHash, ...u });
+        await this.users.put({ id: uuidv4(), passwordHash, name: u.role, ...u });
       }
     });
     const manager = await this.users.where({ role: 'Operations Manager' }).first();
@@ -128,70 +114,75 @@ class SuiteWasteDB extends Dexie {
   }
 }
 const db = new SuiteWasteDB();
+// --- Sync Service ---
+async function syncWithBackend(table: string, action: 'create' | 'update' | 'delete', payload: any) {
+    const endpointMap: Record<string, string> = {
+        tasks: 'tasks',
+        payments: 'payments',
+        complianceLogs: 'compliancelogs',
+        trainingModules: 'trainingmodules',
+        aiMessages: 'aimessages',
+    };
+    const endpoint = endpointMap[table];
+    if (!endpoint) return;
+    const url = action === 'create' ? `/api/${endpoint}` : `/api/${endpoint}/${payload.id}`;
+    const method = action === 'create' ? 'POST' : action === 'update' ? 'PATCH' : 'DELETE';
+    if (navigator.onLine) {
+        try {
+            const response = await fetch(url, {
+                method,
+                headers: { 'Content-Type': 'application/json' },
+                body: action !== 'delete' ? JSON.stringify(payload) : undefined,
+            });
+            if (!response.ok) throw new Error('Network response was not ok.');
+        } catch (error) {
+            console.error('Sync failed, queueing to outbox:', error);
+            await db.outbox.add({ id: uuidv4(), table, action, payload, timestamp: Date.now() });
+            toast.warning('Network issue. Change saved locally.');
+        }
+    } else {
+        await db.outbox.add({ id: uuidv4(), table, action, payload, timestamp: Date.now() });
+        toast.info('Offline. Change saved locally.');
+    }
+}
 // --- Service Worker ---
 const swCode = `
-  const CACHE_NAME = 'suitewaste-os-cache-v2';
+  const CACHE_NAME = 'suitewaste-os-cache-v3';
   const APP_SHELL_URLS = ['/', '/index.html'];
   self.addEventListener('install', event => { event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL_URLS))); });
   self.addEventListener('fetch', event => {
     if (event.request.url.includes('/api/')) {
       event.respondWith(
-        fetch(event.request)
-          .then(networkResponse => {
-            if (networkResponse.ok) {
-              const responseToCache = networkResponse.clone();
-              caches.open(CACHE_NAME).then(cache => cache.put(event.request, responseToCache));
-            }
-            return networkResponse;
-          })
-          .catch(() => caches.match(event.request).then(cachedResponse => {
-            return cachedResponse || new Response(JSON.stringify({ success: false, error: 'Offline' }), { headers: { 'Content-Type': 'application/json' } });
-          }))
+        fetch(event.request).catch(() => {
+          return caches.match(event.request).then(cachedResponse => {
+            return cachedResponse || new Response(JSON.stringify({ success: false, error: 'Offline' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+          });
+        })
       );
     } else {
       event.respondWith(caches.match(event.request).then(response => response || fetch(event.request)));
     }
   });
-  self.addEventListener('message', event => {
-    if (event.data && event.data.type === 'MANUAL_SYNC') {
-      let progress = 0;
-      const interval = setInterval(() => {
-        progress += 20;
-        self.clients.matchAll().then(clients => clients.forEach(client => client.postMessage({ type: 'SYNC_PROGRESS', progress })));
-        if (progress >= 100) {
-          clearInterval(interval);
-          self.clients.matchAll().then(clients => clients.forEach(client => client.postMessage({ type: 'SYNC_COMPLETE' })));
-        }
-      }, 500);
-    }
-  });
 `;
 // --- Custom Hooks ---
-function useRealtimeQuery<T, TKey extends string | number | Date>(
-  table: Dexie.Table<T, TKey>,
-  query: (table: Dexie.Table<T, TKey>) => Promise<T[]>
+function usePollingQuery<T>(
+  queryFn: () => Promise<T[]>,
+  intervalMs = 1000
 ) {
   const [data, setData] = useState<T[]>([]);
-  const fetch_data = useCallback(async () => {
+  const fetchData = useCallback(async () => {
     try {
-      const result = await query(table);
+      const result = await queryFn();
       setData(result);
     } catch (error) {
-      console.error("Realtime query failed:", error);
-      toast.error("Failed to load data.");
+      console.error("Polling query failed:", error);
     }
-  }, [query, table]);
+  }, [queryFn]);
   useEffect(() => {
-    fetch_data();
-    const subscription = table.hook('creating', fetch_data);
-    const subscription2 = table.hook('updating', fetch_data);
-    const subscription3 = table.hook('deleting', fetch_data);
-    return () => {
-      subscription.unsubscribe();
-      subscription2.unsubscribe();
-      subscription3.unsubscribe();
-    };
-  }, [fetch_data, table]);
+    fetchData();
+    const intervalId = setInterval(fetchData, intervalMs);
+    return () => clearInterval(intervalId);
+  }, [fetchData, intervalMs]);
   return data;
 }
 // --- Error Boundary ---
@@ -385,13 +376,13 @@ const SuiteWasteOS = ({ user, onLogout }: { user: User; onLogout: () => void; })
   const openSwitcher = () => setSwitcherOpen(true);
   const closeSwitcher = () => setSwitcherOpen(false);
   const bindSuiteGesture = useGesture({
-    onDrag: ({ event, touches, down, movement: [mx], velocity: [vx] }) => {
-      const isTwoFingerDrag = (event as TouchEvent).touches?.length >= 2 || touches >= 2;
-      if (isTwoFingerDrag && Math.abs(mx) > 50 && Math.abs(vx) > 0.5 && down) {
+    onDrag: ({ active, movement: [mx], velocity: [vx], event }) => {
+      const isTwoFinger = (event as TouchEvent).touches?.length >= 2;
+      if (isTwoFinger && active && Math.abs(mx) > 50 && Math.abs(vx) > 0.5) {
         if (!isSwitcherOpen) openSwitcher();
       }
     },
-  }, { filterTaps: true });
+  }, { filterTaps: true, pointer: { touch: true } });
   const availableSuites = useMemo(() =>
     SUITES.filter(suite => suite.permissions.some(p => user.permissions.includes(p))),
     [user.permissions]
@@ -515,18 +506,21 @@ const DashboardView = ({ suiteKey, onBack }: { suiteKey: SuiteKey; onBack: () =>
   );
 };
 const OperationsDashboard = () => {
-    const tasks = useRealtimeQuery(db.tasks, table => table.orderBy('dueDate').toArray());
+    const tasks = usePollingQuery(() => db.tasks.orderBy('dueDate').toArray());
     const nodes = useMemo<Node[]>(() => tasks.map((task, i) => ({
         id: task.id,
         position: { x: (i % 3) * 200, y: Math.floor(i / 3) * 120 },
         data: { label: `${task.title} (${task.status})` },
         style: { background: task.status === 'completed' ? '#2E7D32' : '#4a4a4a', color: 'white', border: 'none', borderRadius: '8px' }
     })), [tasks]);
-    const edges = useMemo<Edge[]>(() => tasks.slice(1).map((_, i) => ({ id: `e${i}-${i+1}`, source: tasks[i].id, target: tasks[i+1].id, animated: true })), [tasks]);
-    const toggleTaskStatus = (taskId: string) => {
-        db.tasks.get(taskId).then(task => {
-            if (task) db.tasks.update(taskId, { status: task.status === 'pending' ? 'completed' : 'pending' });
-        });
+    const edges = useMemo<Edge[]>(() => tasks.length > 1 ? tasks.slice(1).map((_, i) => ({ id: `e${i}-${i+1}`, source: tasks[i].id, target: tasks[i+1].id, animated: true })) : [], [tasks]);
+    const toggleTaskStatus = async (taskId: string) => {
+        const task = await db.tasks.get(taskId);
+        if (task) {
+            const newStatus = task.status === 'pending' ? 'completed' : 'pending';
+            await db.tasks.update(taskId, { status: newStatus });
+            await syncWithBackend('tasks', 'update', { id: taskId, status: newStatus });
+        }
     };
     return (
         <div className="h-full w-full rounded-lg overflow-hidden">
@@ -539,7 +533,7 @@ const OperationsDashboard = () => {
     );
 };
 const PaymentsDashboard = () => {
-    const payments = useRealtimeQuery(db.payments, table => table.orderBy('date').toArray());
+    const payments = usePollingQuery(() => db.payments.orderBy('date').toArray());
     const chartData = useMemo(() => {
         return payments?.reduce((acc, p) => {
             const month = new Date(p.date).toLocaleString('default', { month: 'short' });
@@ -579,9 +573,11 @@ const PaymentsDashboard = () => {
     );
 };
 const ComplianceDashboard = () => {
-    const logs = useRealtimeQuery(db.complianceLogs, table => table.orderBy('timestamp').reverse().toArray());
-    const toggleCompliance = (log: ComplianceLog) => {
-        db.complianceLogs.update(log.id, { compliant: !log.compliant });
+    const logs = usePollingQuery(() => db.complianceLogs.orderBy('timestamp').reverse().toArray());
+    const toggleCompliance = async (log: ComplianceLog) => {
+        const newCompliant = !log.compliant;
+        await db.complianceLogs.update(log.id, { compliant: newCompliant });
+        await syncWithBackend('complianceLogs', 'update', { id: log.id, compliant: newCompliant });
     };
     return (
         <ul className="space-y-2">
@@ -600,10 +596,12 @@ const ComplianceDashboard = () => {
     );
 };
 const TrainingDashboard = () => {
-    const modules = useRealtimeQuery(db.trainingModules, table => table.toArray());
+    const modules = usePollingQuery(() => db.trainingModules.toArray());
     const [emblaRef] = useEmblaCarousel();
-    const toggleModule = (mod: TrainingModule) => {
-        db.trainingModules.update(mod.id, { completed: !mod.completed });
+    const toggleModule = async (mod: TrainingModule) => {
+        const newCompleted = !mod.completed;
+        await db.trainingModules.update(mod.id, { completed: newCompleted });
+        await syncWithBackend('trainingModules', 'update', { id: mod.id, completed: newCompleted });
     };
     return (
         <div className="embla" ref={emblaRef}>
@@ -630,16 +628,18 @@ const TrainingDashboard = () => {
     );
 };
 const AiDashboard = () => {
-    const messages = useRealtimeQuery(db.aiMessages, table => table.orderBy('timestamp').toArray());
+    const messages = usePollingQuery(() => db.aiMessages.orderBy('timestamp').toArray());
     const [input, setInput] = useState('');
     const handleSend = async () => {
         if (!input.trim()) return;
         const userMessage: AiMessage = { id: uuidv4(), role: 'user', content: input, timestamp: Date.now() };
         await db.aiMessages.add(userMessage);
+        await syncWithBackend('aiMessages', 'create', userMessage);
         setInput('');
         setTimeout(async () => {
             const aiResponse: AiMessage = { id: uuidv4(), role: 'ai', content: `This is a simulated AI response to: "${input}"`, timestamp: Date.now() };
             await db.aiMessages.add(aiResponse);
+            await syncWithBackend('aiMessages', 'create', aiResponse);
         }, 1000);
     };
     return (
@@ -662,40 +662,42 @@ const AiDashboard = () => {
 };
 // --- Settings Sheet ---
 const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
-  const [syncProgress, setSyncProgress] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
   const handleManualSync = useCallback(async () => {
     if (isSyncing) return;
-    if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) {
-      toast.error("Service Worker not available for sync.");
-      return;
-    }
-    setIsSyncing(true);
-    setSyncProgress(0);
-    const outboxItems = await db.outbox.toArray();
-    if (outboxItems.length === 0) {
-        toast.info("No items to sync.");
-        setIsSyncing(false);
+    if (!navigator.onLine) {
+        toast.error("You are offline. Cannot sync.");
         return;
     }
-    navigator.serviceWorker.controller.postMessage({ type: 'MANUAL_SYNC' });
-    setTimeout(async () => {
+    const itemsToSync = await db.outbox.toArray();
+    if (itemsToSync.length === 0) {
+        toast.info("Everything is up to date.");
+        return;
+    }
+    setIsSyncing(true);
+    toast.loading("Syncing data with the server...");
+    try {
+        const response = await fetch('/api/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items: itemsToSync }),
+        });
+        if (!response.ok) throw new Error('Sync failed on the server.');
+        const result = await response.json();
         await db.outbox.clear();
-        toast.success(`${outboxItems.length} items synced.`);
-    }, 2500);
+        toast.dismiss();
+        toast.success(`${result.data.synced} items synced successfully!`);
+    } catch (error) {
+        toast.dismiss();
+        toast.error("Sync failed. Please try again later.");
+        console.error("Manual sync error:", error);
+    } finally {
+        setIsSyncing(false);
+    }
   }, [isSyncing]);
   useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      if (event.data.type === 'SYNC_PROGRESS') setSyncProgress(event.data.progress);
-      else if (event.data.type === 'SYNC_COMPLETE') {
-        setSyncProgress(100);
-        setTimeout(() => { setIsSyncing(false); toast.success("Manual sync completed."); }, 500);
-      }
-    };
-    if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', handleMessage);
     window.addEventListener('online', handleManualSync);
-    return () => { 
-      if ('serviceWorker' in navigator) navigator.serviceWorker.removeEventListener('message', handleMessage);
+    return () => {
       window.removeEventListener('online', handleManualSync);
     };
   }, [handleManualSync]);
@@ -722,9 +724,8 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
             <h3 className="font-semibold">Manual Sync</h3>
             <p className="text-sm text-neutral-400">Force sync local data with the network. Sync also runs automatically when online.</p>
             <Button onClick={handleManualSync} disabled={isSyncing} className="w-full bg-green-600 text-white hover:bg-green-700">
-              {isSyncing ? 'Syncing...' : 'Start Manual Sync'}
+              {isSyncing ? <><Loader className="mr-2 h-4 w-4 animate-spin" /> Syncing...</> : 'Start Manual Sync'}
             </Button>
-            {isSyncing && <Progress value={syncProgress} className="mt-2 [&>*]:bg-green-400" />}
           </div>
           <div className="space-y-2">
             <h3 className="font-semibold text-red-400">Danger Zone</h3>
@@ -737,7 +738,7 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
           </Button>
         </div>
         <footer className="absolute bottom-4 left-4 right-4 text-center text-xs text-neutral-500">
-            Built with ��️ at Cloudflare
+            Built with ❤️ at Cloudflare
         </footer>
       </SheetContent>
     </Sheet>
