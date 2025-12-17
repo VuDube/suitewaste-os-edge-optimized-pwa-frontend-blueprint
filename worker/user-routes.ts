@@ -108,9 +108,10 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
       }
       try {
         switch (item.action) {
-          case 'create':
+          case 'create': {
             await EntityClass.create(c.env, item.payload);
             break;
+          }
           case 'update': {
             const entityToUpdate = new EntityClass(c.env, item.payload.id);
             if (await entityToUpdate.exists()) {
@@ -120,9 +121,10 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
             }
             break;
           }
-          case 'delete':
+          case 'delete': {
             await EntityClass.delete(c.env, item.payload.id);
             break;
+          }
         }
         syncedCount++;
       } catch (e) {

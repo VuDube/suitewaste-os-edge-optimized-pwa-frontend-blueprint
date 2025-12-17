@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef, forwardRef, PropsWithChildren } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, forwardRef } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -68,12 +68,10 @@ await this.transaction('rw', this.users, async () => {
     try {
       await this.users.put({ id: uuidv4(), passwordHash, ...u });
     } catch (e) {
-      // If the email already exists (unique index violation), skip inserting this demo user
       if ((e as any)?.name === 'ConstraintError') {
         console.log(`Skipping demo user ${u.email}: already exists`);
         continue;
       }
-      // Re‑throw unexpected errors
       throw e;
     }
   }
@@ -156,7 +154,7 @@ async function syncWithBackend(table: string, action: 'create' | 'update' | 'del
 }
 // --- Service Worker ---
 const swCode = `
-  const CACHE_NAME = 'suitewaste-os-cache-v4';
+  const CACHE_NAME = 'suitewaste-os-cache-v5';
   const APP_SHELL_URLS = ['/', '/index.html'];
   self.addEventListener('install', event => { event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL_URLS))); });
   self.addEventListener('fetch', event => {
@@ -176,7 +174,13 @@ const swCode = `
 // --- Custom Hooks ---
 function usePollingQuery<T>(queryFn: () => Promise<T[]>, intervalMs = 1000) {
   const [data, setData] = useState<T[]>([]);
-  const stableQueryFn = useCallback(queryFn, []);
+  const queryFnRef = useRef(queryFn);
+  useEffect(() => {
+    queryFnRef.current = queryFn;
+  }, [queryFn]);
+  const stableQueryFn = useCallback(() => {
+    return queryFnRef.current();
+  }, []);
   useEffect(() => {
     let isMounted = true;
     const fetchData = async () => {
@@ -197,8 +201,8 @@ function usePollingQuery<T>(queryFn: () => Promise<T[]>, intervalMs = 1000) {
   return data;
 }
 // --- Error Boundary ---
-class DashboardErrorBoundary extends React.Component<PropsWithChildren<{ fallback: React.ReactNode }>, { hasError: boolean }> {
-  constructor(props: PropsWithChildren<{ fallback: React.ReactNode }>) {
+class DashboardErrorBoundary extends React.Component<React.PropsWithChildren<{ fallback: React.ReactNode }>, { hasError: boolean }> {
+  constructor(props: React.PropsWithChildren<{ fallback: React.ReactNode }>) {
     super(props);
     this.state = { hasError: false };
   }
@@ -330,7 +334,7 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (user: User) => void 
           <h1 className="text-4xl font-bold text-white">SuiteWaste OS</h1>
           <p className="text-lg text-gray-300 text-[clamp(1rem,4vw,1.125rem)]">Edge-Optimized Waste Management</p>
         </motion.div>
-        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5, delay: 0.2 }} className="bg-black/20 backdrop-blur-[20px] border border-white/20 rounded-3xl p-8 shadow-[0_25px_50px_rgba(0,0,0,0.5)]">
+        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5, delay: 0.2 }} className="bg-black/30 backdrop-blur-[24px] border border-white/20 rounded-[2.5rem] p-8 md:p-10 shadow-[0_35px_70px_rgba(0,0,0,0.6)]">
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
               <FormField control={form.control} name="email" render={({ field }) => (
@@ -384,15 +388,15 @@ const SUITES: { key: SuiteKey; label: string; icon: React.ElementType; permissio
 const SuiteWasteOS = ({ user, onLogout }: { user: User; onLogout: () => void; }) => {
   const [activeSuite, setActiveSuite] = useState<SuiteKey | null>(null);
   const [isSwitcherOpen, setSwitcherOpen] = useState(false);
-  const openSwitcher = () => setSwitcherOpen(true);
-  const closeSwitcher = () => setSwitcherOpen(false);
+  const openSwitcher = useCallback(() => setSwitcherOpen(true), []);
+  const closeSwitcher = useCallback(() => setSwitcherOpen(false), []);
   const bindSuiteGesture = useGesture({
-    onDrag: ({ pointerIds, movement: [mx], velocity: [vx] }) => {
-      if (pointerIds.size >= 2 && Math.abs(mx) > 50 && Math.abs(vx) > 0.5) {
+    onDrag: ({ active, movement: [mx], velocity: [vx], touches }) => {
+      if (active && touches >= 2 && Math.abs(mx) > 50 && Math.abs(vx) > 0.5) {
         if (!isSwitcherOpen) openSwitcher();
       }
     },
-  }, { filterTaps: true, pointer: { touches: true, locks: true } });
+  }, { pointer: { touches: true } });
   const availableSuites = useMemo(() =>
     SUITES.filter(suite => suite.permissions.some(p => user.permissions.includes(p))),
     [user.permissions]
@@ -402,7 +406,7 @@ const SuiteWasteOS = ({ user, onLogout }: { user: User; onLogout: () => void; })
     closeSwitcher();
   };
   return (
-    <div className="h-[calc(100vh-4rem)] md:h-[calc(100vh-5rem)] lg:h-[calc(100vh-6rem)] max-w-lg mx-auto flex flex-col bg-black/80 rounded-3xl shadow-[0_25px_50px_rgba(0,0,0,0.5)] overflow-hidden border border-white/20" {...bindSuiteGesture()}>
+    <div className="h-[calc(100vh-4rem)] md:h-[calc(100vh-5rem)] lg:h-[calc(100vh-6rem)] max-w-lg mx-auto flex flex-col bg-black/80 rounded-[2.5rem] shadow-[0_35px_70px_rgba(0,0,0,0.6)] overflow-hidden border border-white/20" {...bindSuiteGesture()}>
       <StatusBar />
       <div className="flex-grow overflow-y-auto p-1 sm:p-2 lg:p-4">
         <AnimatePresence mode="wait">
@@ -441,12 +445,27 @@ const StatusBar = () => {
 };
 const Homescreen = ({ user, availableSuites, onSuiteSelect }: { user: User; availableSuites: typeof SUITES; onSuiteSelect: (key: SuiteKey) => void; }) => (
   <div className="py-8">
-    <h2 className="text-3xl font-bold text-center mb-10 text-white text-[clamp(1.5rem,5vw,2rem)]">Welcome, {user.role}</h2>
-    <div className="grid grid-cols-3 sm:grid-cols-4 gap-y-8 gap-x-4 justify-items-center">
+    <motion.h2
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="text-3xl font-bold text-center mb-10 text-white text-[clamp(1.5rem,5vw,2rem)]"
+    >
+      Welcome, {user.role}
+    </motion.h2>
+    <motion.div
+      className="grid grid-cols-3 sm:grid-cols-4 gap-y-8 gap-x-4 justify-items-center"
+      variants={{
+        visible: { transition: { staggerChildren: 0.05 } },
+      }}
+      initial="hidden"
+      animate="visible"
+    >
       {availableSuites.map(suite => (
-        <SuiteIcon key={suite.key} icon={suite.icon} label={suite.label} onClick={() => onSuiteSelect(suite.key)} className="bg-white/5 hover:bg-white/10 border-white/10" />
+        <motion.div key={suite.key} variants={{ hidden: { opacity: 0, scale: 0.8 }, visible: { opacity: 1, scale: 1 } }}>
+          <SuiteIcon icon={suite.icon} label={suite.label} onClick={() => onSuiteSelect(suite.key)} className="bg-white/5 hover:bg-white/10 border-white/10" />
+        </motion.div>
       ))}
-    </div>
+    </motion.div>
   </div>
 );
 const Dock = ({ onSwitcherOpen, onLogout }: { onSwitcherOpen: () => void; onLogout: () => void; }) => (
@@ -462,7 +481,6 @@ const SuiteSwitcher = ({ isOpen, onClose, availableSuites, onSuiteSelect }: { is
     {isOpen && (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center">
         <motion.div
-          drag="x" dragConstraints={{ left: 0, right: 0 }}
           initial={{ scale: 0.8, y: 50 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.8, y: 50 }}
           transition={{ type: 'spring', damping: 20, stiffness: 300 }}
           className="w-full max-w-md p-4 flex justify-center items-center gap-4"
@@ -499,7 +517,7 @@ const DashboardView = ({ suiteKey, onBack }: { suiteKey: SuiteKey; onBack: () =>
     }
   };
   return (
-    <Card className="bg-black/20 border border-white/20 backdrop-blur-[20px] text-white rounded-3xl p-4 shadow-[0_25px_50px_rgba(0,0,0,0.5)] h-full flex flex-col">
+    <Card className="bg-black/20 border border-white/20 backdrop-blur-[24px] text-white rounded-[2.5rem] p-4 md:p-6 shadow-[0_35px_70px_rgba(0,0,0,0.6)] h-full flex flex-col">
       <CardHeader className="flex flex-row items-center justify-between p-0 mb-4">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="icon" onClick={onBack} className="text-white/80 hover:text-white hover:bg-white/10 rounded-full"><ArrowLeft /></Button>
@@ -517,14 +535,15 @@ const DashboardView = ({ suiteKey, onBack }: { suiteKey: SuiteKey; onBack: () =>
 };
 const OperationsDashboard = () => {
     const tasks = usePollingQuery(() => db.tasks.orderBy('dueDate').toArray());
-    const nodes = useMemo<Node[]>(() => tasks.map((task, i) => ({
+    const nodes = useMemo<Node[]>(() => tasks?.map((task, i) => ({
         id: task.id,
         position: { x: (i % 3) * 200, y: Math.floor(i / 3) * 120 },
         data: { label: `${task.title} (${task.status})` },
         style: { background: task.status === 'completed' ? '#2E7D32' : '#4a4a4a', color: 'white', border: 'none', borderRadius: '8px' }
-    })), [tasks]);
-    const edges = useMemo<Edge[]>(() => tasks.length > 1 ? tasks.slice(1).map((_, i) => ({ id: `e${i}-${i+1}`, source: tasks[i].id, target: tasks[i+1].id, animated: true })) : [], [tasks]);
-    const toggleTaskStatus = async (taskId: string) => {
+    })) ?? [], [tasks]);
+    const edges = useMemo<Edge[]>(() => (tasks?.length ?? 0) > 1 ? tasks.slice(1).map((_, i) => ({ id: `e${i}-${i+1}`, source: tasks[i].id, target: tasks[i+1].id, animated: true })) : [], [tasks]);
+    const toggleTaskStatus = async (taskId?: string) => {
+        if (!taskId) return;
         const task = await db.tasks.get(taskId);
         if (task) {
             const newStatus = task.status === 'pending' ? 'completed' : 'pending';
@@ -535,7 +554,7 @@ const OperationsDashboard = () => {
     };
     return (
         <div className="h-full w-full rounded-lg overflow-hidden">
-            <ReactFlow nodes={nodes} edges={edges} onNodeDoubleClick={(_, node) => toggleTaskStatus(node.id)} fitView>
+            <ReactFlow nodes={nodes} edges={edges} onNodeDoubleClick={(_, node) => toggleTaskStatus(node?.id)} fitView>
                 <Background color="#444" />
                 <Controls />
                 <MiniMap />
@@ -555,7 +574,7 @@ const PaymentsDashboard = () => {
                 acc.push({ name: month, paid: p.status === 'paid' ? p.amount : 0, due: p.status === 'due' ? p.amount : 0 });
             }
             return acc;
-        }, [] as { name: string; paid: number; due: number }[]).reverse();
+        }, [] as { name: string; paid: number; due: number }[]).reverse() ?? [];
     }, [payments]);
     return (
         <div className="space-y-4 h-[500px]">
@@ -697,7 +716,7 @@ const SettingsSheet = ({ onLogout }: { onLogout: () => void }) => {
         });
         if (!response.ok) throw new Error('Sync failed on the server.');
         const result = await response.json();
-        if (result.success) {
+        if (result.success && result.data) {
             await db.outbox.clear();
             toast.success(`${result.data.synced} items synced successfully!`, { id: syncToast });
         } else {
