@@ -47,7 +47,7 @@ class SuiteWasteDB extends Dexie {
       if (userCount > 0) return;
       const passwordHash = await hashText('Auditor123');
       await this.users.put({
-        id: uuidv4(),
+        id: 'seed-ops-manager',
         email: 'manager@suitewaste.os',
         name: 'Operations Manager',
         role: 'Operations Manager',
@@ -56,8 +56,8 @@ class SuiteWasteDB extends Dexie {
       });
       const manager = await this.users.toCollection().first();
       if (manager) {
-      await this.tasks.add({ id: uuidv4(), title: 'Route #101 Pickup', status: 'pending' as const, assignedTo: manager.id, dueDate: Date.now() });
-      await this.payments.add({ id: uuidv4(), amount: 1500, status: 'due' as const, client: 'WasteCorp A', date: Date.now() });
+        await this.tasks.add({ id: uuidv4(), title: 'Route #101 Pickup', status: 'pending' as const, assignedTo: manager.id, dueDate: Date.now() });
+        await this.payments.add({ id: uuidv4(), amount: 1500, status: 'due' as const, client: 'WasteCorp A', date: Date.now() });
         await this.complianceLogs.add({ id: uuidv4(), description: 'Site safety check', compliant: true, timestamp: Date.now() });
         await this.trainingModules.add({ id: uuidv4(), title: 'Hazmat 101', content: '...', completed: true });
       }
@@ -111,7 +111,7 @@ function usePollingQuery<T>(queryFn: () => Promise<T[]>, intervalMs = 3000) {
     fetch();
     const id = setInterval(fetch, intervalMs);
     return () => clearInterval(id);
-  }, [intervalMs, queryRef]);
+  }, [intervalMs]);
   return data;
 }
 const loginSchema = z.object({
@@ -134,13 +134,15 @@ const LoginScreen = ({ onLoginSuccess }: { onLoginSuccess: (user: User) => void 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#0f0f0f] p-6">
       <div className="w-full max-w-sm space-y-8 text-center">
-        <motion.img 
-          initial={{ opacity: 0, scale: 0.8 }} 
+        <motion.svg
+          initial={{ opacity: 0, scale: 0.8 }}
           animate={{ opacity: 1, scale: 1 }}
-          src="https://i.imgur.com/Jt5g2S6.png" 
-          className="w-32 h-32 mx-auto mb-6" 
-          style={{ filter: 'drop-shadow(0 0 15px rgba(46, 125, 50, 0.8))' }} 
-        />
+          viewBox='0 0 100 100'
+          className='w-32 h-32 mx-auto mb-6'
+          style={{ filter: 'drop-shadow(0 0 15px rgba(46, 125, 50, 0.8))' }}
+        >
+          <path fill='#22C55E' stroke='rgba(255,255,255,0.2)' strokeWidth='1.5' d='M 50 5 Q 35 15 30 40 Q 28 55 40 70 Q 50 82 60 70 Q 72 55 70 40 Q 65 15 50 5 Z' />
+        </motion.svg>
         <h1 className="text-4xl font-bold text-white mb-2">SuiteWaste OS</h1>
         <p className="text-gray-400 text-xs uppercase tracking-widest">Industrial Waste Management</p>
         <Card className="bg-black/40 border-white/10 backdrop-blur-2xl rounded-[2.5rem] p-8 shadow-2xl">
