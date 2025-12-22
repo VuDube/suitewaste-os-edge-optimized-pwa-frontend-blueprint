@@ -22,6 +22,7 @@ import '@xyflow/react/dist/style.css';
 import type { User, Session, Task, Payment, ComplianceLog, TrainingModule, AiMessage } from '@shared/types';
 // --- Database ---
 class SuiteWasteDB extends Dexie {
+  private _seedPromise?: Promise<void>;
   users!: Table<User, string>;
   sessions!: Table<Session, string>;
   tasks!: Table<Task, string>;
@@ -42,9 +43,10 @@ class SuiteWasteDB extends Dexie {
     });
   }
   async seedIfEmpty() {
-    await this.transaction('rw', this.users, this.tasks, this.payments, this.complianceLogs, this.trainingModules, async () => {
-      const userCount = await this.users.count();
-      if (userCount > 0) return;
+    if (this._seedPromise) return this._seedPromise;
+    this._seedPromise = this.transaction('rw', this.users, this.tasks, this.payments, this.complianceLogs, this.trainingModules, async () => {
+      const existingSeed = await this.users.get('seed-ops-manager');
+      if (existingSeed) return;
       const passwordHash = await hashText('Auditor123');
       await this.users.put({
         id: 'seed-ops-manager',
@@ -54,14 +56,15 @@ class SuiteWasteDB extends Dexie {
         permissions: ['operations', 'payments', 'compliance', 'training', 'ai'],
         passwordHash
       });
-      const manager = await this.users.toCollection().first();
+      const manager = await this.users.get('seed-ops-manager');
       if (manager) {
         await this.tasks.add({ id: uuidv4(), title: 'Route #101 Pickup', status: 'pending' as const, assignedTo: manager.id, dueDate: Date.now() });
         await this.payments.add({ id: uuidv4(), amount: 1500, status: 'due' as const, client: 'WasteCorp A', date: Date.now() });
         await this.complianceLogs.add({ id: uuidv4(), description: 'Site safety check', compliant: true, timestamp: Date.now() });
         await this.trainingModules.add({ id: uuidv4(), title: 'Hazmat 101', content: '...', completed: true });
       }
-    });
+    }).finally(() => { this._seedPromise = undefined; });
+    return this._seedPromise;
   }
   async signIn(email: string, password: string): Promise<User | null> {
     const user = await this.users.where({ email }).first();
@@ -183,10 +186,10 @@ export function HomePage() {
     });
   }, []);
   const bindGestures = useGesture({
-    onDrag: ({ active, touches, movement: [mx] }) => {
+    onDrag: ({ active, touches, movement: [mx] }: any) => {
       if (active && touches >= 2 && Math.abs(mx) > 60) setSwitcherOpen(true);
     },
-  });
+  }, { target: window });
   const availableSuites = useMemo(() => {
     if (!currentUser?.permissions) return [];
     return SUITES.filter(s => s.permissions.some(p => currentUser.permissions.includes(p)));
@@ -261,9 +264,9 @@ export function HomePage() {
                       onClick={(e) => { e.stopPropagation(); setActiveSuite(s.key); setSwitcherOpen(false); }}
                       className="flex-shrink-0 w-32 h-48 bg-white/5 border border-white/10 rounded-[2rem] flex flex-col items-center justify-center gap-4 shadow-2xl backdrop-blur-md"
                     >
-                      <div className="w-12 h-12 bg-white/10 rounded-xl flex items-center justify-center">
-                        <s.icon className="w-7 h-7 text-white" />
-                      </div>
+                        <div className="w-12 h-12 bg-white/10 rounded-xl flex items-center justify-center">
+                          <s.icon className="w-7 h-7 text-white" />
+                        </div>
                       <span className="text-[10px] font-bold text-white uppercase tracking-widest">{s.label}</span>
                     </motion.button>
                   ))}
@@ -300,10 +303,12 @@ const PaymentsSuite = () => {
   const payments = usePollingQuery(() => db.payments.toArray());
   const chartData = useMemo(() => {
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'];
+    const paidTotal = payments?.filter(p => p.status === 'paid').reduce((sum, p) => sum + p.amount, 0) || 0;
+    const dueTotal = payments?.filter(p => p.status === 'due').reduce((sum, p) => sum + p.amount, 0) || 0;
     return months.map(m => ({
       name: m,
-      paid: payments?.filter(p => p.status === 'paid').reduce((sum, p) => sum + p.amount, 0) / 6 || 0,
-      due: payments?.filter(p => p.status === 'due').reduce((sum, p) => sum + p.amount, 0) / 6 || 0,
+      paid: paidTotal / 6,
+      due: dueTotal / 6,
     }));
   }, [payments]);
   return (
