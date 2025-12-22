@@ -86,7 +86,8 @@ function runSetupCommands() {
     "bun install react-flow",
     "bun remove react-flow",
     "bun add @xyflow/react",
-    "bun add @xyflow/react@^12.10.0"
+    "bun add @xyflow/react@^12.10.0",
+    "bun remove recharts @tanstack/react-query"
 ];
     
     if (commands.length === 0) {
