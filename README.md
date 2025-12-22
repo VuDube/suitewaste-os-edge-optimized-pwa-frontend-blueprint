@@ -1,6 +1,6 @@
 # SuiteWaste OS — Edge-Optimized PWA
 
-[cloudflarebutton]
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/VuDube/suitewaste-os-edge-optimized-pwa-frontend-blueprint)
 
 ## Overview
 
@@ -142,7 +142,7 @@ Deploy to Cloudflare Pages for global edge delivery:
    - Output directory: `dist`
    - Framework: Vite
 
-[cloudflarebutton]
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/VuDube/suitewaste-os-edge-optimized-pwa-frontend-blueprint)
 
 The PWA will be accessible at `<project-name>.pages.dev`. Enable service worker in production for offline support.
 
