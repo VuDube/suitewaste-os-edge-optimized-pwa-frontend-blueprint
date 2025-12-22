@@ -42,24 +42,26 @@ class SuiteWasteDB extends Dexie {
     });
   }
   async seedIfEmpty() {
-    const userCount = await this.users.count();
-    if (userCount > 0) return;
-    const passwordHash = await hashText('Auditor123');
-    await this.users.put({
-      id: uuidv4(),
-      email: 'manager@suitewaste.os',
-      name: 'Operations Manager',
-      role: 'Operations Manager',
-      permissions: ['operations', 'payments', 'compliance', 'training', 'ai'],
-      passwordHash
+    await this.transaction('rw', this.users, this.tasks, this.payments, this.complianceLogs, this.trainingModules, async () => {
+      const userCount = await this.users.count();
+      if (userCount > 0) return;
+      const passwordHash = await hashText('Auditor123');
+      await this.users.put({
+        id: uuidv4(),
+        email: 'manager@suitewaste.os',
+        name: 'Operations Manager',
+        role: 'Operations Manager',
+        permissions: ['operations', 'payments', 'compliance', 'training', 'ai'],
+        passwordHash
+      });
+      const manager = await this.users.toCollection().first();
+      if (manager) {
+      await this.tasks.add({ id: uuidv4(), title: 'Route #101 Pickup', status: 'pending' as const, assignedTo: manager.id, dueDate: Date.now() });
+      await this.payments.add({ id: uuidv4(), amount: 1500, status: 'due' as const, client: 'WasteCorp A', date: Date.now() });
+        await this.complianceLogs.add({ id: uuidv4(), description: 'Site safety check', compliant: true, timestamp: Date.now() });
+        await this.trainingModules.add({ id: uuidv4(), title: 'Hazmat 101', content: '...', completed: true });
+      }
     });
-    const manager = await this.users.toCollection().first();
-    if (manager) {
-      await this.tasks.add({ id: uuidv4(), title: 'Route #101 Pickup', status: 'pending', assignedTo: manager.id, dueDate: Date.now() });
-      await this.payments.add({ id: uuidv4(), amount: 1500, status: 'due', client: 'WasteCorp A', date: Date.now() });
-      await this.complianceLogs.add({ id: uuidv4(), description: 'Site safety check', compliant: true, timestamp: Date.now() });
-      await this.trainingModules.add({ id: uuidv4(), title: 'Hazmat 101', content: '...', completed: true });
-    }
   }
   async signIn(email: string, password: string): Promise<User | null> {
     const user = await this.users.where({ email }).first();
@@ -109,7 +111,7 @@ function usePollingQuery<T>(queryFn: () => Promise<T[]>, intervalMs = 3000) {
     fetch();
     const id = setInterval(fetch, intervalMs);
     return () => clearInterval(id);
-  }, [intervalMs]);
+  }, [intervalMs, queryRef]);
   return data;
 }
 const loginSchema = z.object({
